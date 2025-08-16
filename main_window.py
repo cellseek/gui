@@ -115,21 +115,8 @@ class ModelLoadWorker(QThread):
                 xmem_path = Path(__file__).parent.parent / "xmem"
                 xmem_checkpoint = xmem_path / "checkpoints" / "XMem-s012.pth"
 
-                # Create minimal args object
-                class TrackArgs:
-                    def __init__(self):
-                        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-                        self.sam_model_type = "vit_h"
-                        self.debug = False
-                        self.mask_save = False
-
-                track_args = TrackArgs()
-
                 if xmem_checkpoint.exists():
-                    xmem = XMem(
-                        xmem_checkpoint=str(xmem_checkpoint),
-                        args=track_args,
-                    )
+                    xmem = XMem(xmem_checkpoint=str(xmem_checkpoint))
                     self._models["xmem"] = xmem
                     self.model_loaded.emit("xmem", xmem)
                     self.progress_update.emit("XMem loaded successfully")

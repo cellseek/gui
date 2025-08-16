@@ -72,21 +72,8 @@ class TrackingWorker(QThread):
                 xmem_path = Path(__file__).parent.parent.parent / "xmem"
                 xmem_checkpoint = xmem_path / "checkpoints" / "XMem-s012.pth"
 
-                # Create args object
-                class TrackArgs:
-                    def __init__(self):
-                        self.device = self.parameters.get("device", "cuda:0")
-                        self.sam_model_type = self.parameters.get("sam_model", "vit_h")
-                        self.debug = False
-                        self.mask_save = False
-
-                track_args = TrackArgs()
-
                 # Initialize tracker
-                tracker = XMem(
-                    xmem_checkpoint=str(xmem_checkpoint),
-                    args=track_args,
-                )
+                tracker = XMem(xmem_checkpoint=str(xmem_checkpoint))
 
             if self._cancelled:
                 return
