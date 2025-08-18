@@ -1,16 +1,37 @@
-# CellSeek GUI
+# CellSeek GUI - Frame-by-Frame Cell Tracking
 
-A modern PyQt6-based graphical user interface for cell segmentation and tracking using CellSAM and XMem.
+A modern PyQt6 interface for frame-by-frame cell segmentation and tracking using CellSAM, SAM, and CUTIE.
+
+## Overview
+
+This GUI implements a frame-by-frame workflow where users are involved in every step of the cell tracking process. It's designed for scenarios where manual correction and supervision are needed at each frame.
+
+## Quick Start
+
+### Prerequisites
+
+```bash
+pip install PyQt6 opencv-python numpy torch torchvision natsort psutil
+```
+
+### Running the Application
+
+```bash
+cd gui
+python main.py
+```
 
 ## Features
 
-- **Modern Dark Theme**: Professional, eye-friendly interface
-- **Drag & Drop Frame Loading**: Easy import of image sequences
-- **CellSAM Integration**: Automatic cell segmentation on first frame
-- **Manual Annotation**: Fine-tune segmentation with SAM tools
-- **XMem Tracking**: Track cells across video frames
-- **Real-time Analysis**: Cell parameter calculation and visualization
-- **Comprehensive Export**: Multiple format support for results
+- **Modern Dark Theme**: Professional, eye-friendly interface optimized for long work sessions
+- **Drag & Drop Import**: Support for video files and image sequences
+- **Frame-by-Frame Workflow**: Manual supervision at every step
+- **CellSAM Integration**: Automatic cell segmentation for initial frame
+- **SAM Manual Annotation**: Point/box-based editing and mask removal
+- **Real-time Feedback**: Immediate visual updates for all operations
+- **Keyboard Shortcuts**: Efficient navigation and tool switching
+- **Memory Monitoring**: Display of current memory usage
+- **Progress Tracking**: Visual progress indicators for long operations
 
 ## Installation
 
@@ -83,7 +104,7 @@ pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
 ### 5. Cell Tracking
 
 - Move to the Tracking tab
-- Configure XMem parameters
+- Configure CUTIE parameters
 - Click "Start Tracking" to track cells across all frames
 - Monitor progress in real-time
 - View tracking results with overlay visualization
@@ -124,7 +145,7 @@ gui/
     ├── __init__.py
     ├── frame_manager.py     # Frame loading and display
     ├── segmentation_panel.py # CellSAM integration
-    ├── tracking_panel.py    # XMem integration
+    ├── tracking_panel.py    # CUTIE integration
     ├── analysis_panel.py    # Data analysis and plots
     └── export_panel.py      # Result export
 ```
@@ -138,7 +159,7 @@ gui/
 - **Cellprob Threshold**: Cell probability cutoff
 - **Cell Diameter**: Expected cell size in pixels
 
-### XMem Parameters
+### CUTIE Parameters
 
 - **Memory Bank Size**: Tracking memory capacity
 - **Update Frequency**: How often to update tracking
@@ -212,7 +233,7 @@ For issues and questions:
 ### v1.0.0 (Initial Release)
 
 - Complete GUI framework
-- CellSAM and XMem integration
+- CellSAM and CUTIE integration
 - Modern dark theme
 - Comprehensive export system
 - Real-time analysis and visualization

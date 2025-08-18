@@ -41,3 +41,5 @@ imageio
 imageio-ffmpeg
 
 natsort
+omegaconf
+hydra

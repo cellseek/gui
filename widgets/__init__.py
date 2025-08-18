@@ -1,17 +1,8 @@
 """
-GUI widgets for CellSeek application
+GUI widgets for CellSeek frame-by-frame application
 """
 
-from .analysis_panel import AnalysisPanel
-from .export_panel import ExportPanel
-from .frame_manager import FrameManagerWidget
-from .segmentation_panel import SegmentationPanel
-from .tracking_panel import TrackingPanel
+from .frame_by_frame_widget import FrameByFrameWidget
+from .media_import_widget import MediaImportWidget
 
-__all__ = [
-    "FrameManagerWidget",
-    "SegmentationPanel",
-    "TrackingPanel",
-    "AnalysisPanel",
-    "ExportPanel",
-]
+__all__ = ["FrameByFrameWidget", "MediaImportWidget"]

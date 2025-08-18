@@ -1,8 +1,8 @@
 """
-CellSeek GUI - A modern PyQt6 interface for cell segmentation and tracking
+CellSeek GUI - A modern PyQt6 interface for frame-by-frame cell segmentation and tracking
 
 This module provides the main application class and entry point for the
-CellSeek GUI application that integrates CellSAM, XMem, and analysis tools.
+CellSeek GUI application that integrates CellSAM, SAM, and CUTIE for frame-by-frame processing.
 """
 
 import sys
@@ -12,30 +12,28 @@ from pathlib import Path
 current_dir = Path(__file__).parent
 project_root = current_dir.parent
 sam_path = project_root / "sam"
-xmem_path = project_root / "xmem"
-seek_path = project_root / "seek"
+cutie_path = project_root / "cutie"
 
 sys.path.insert(0, str(sam_path.resolve()))
-sys.path.insert(0, str(xmem_path.resolve()))
-sys.path.insert(0, str(seek_path.resolve()))
+sys.path.insert(0, str(cutie_path.resolve()))
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
-from main_window import MainWindow
+from new_main_window import NewMainWindow
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __author__ = "CellSeek Team"
 
 
 class CellSeekApp(QApplication):
-    """Main application class for CellSeek GUI"""
+    """Frame-by-frame application class for CellSeek GUI"""
 
     def __init__(self, argv):
         super().__init__(argv)
 
         # Set application properties
-        self.setApplicationName("CellSeek")
+        self.setApplicationName("CellSeek Frame-by-Frame")
         self.setApplicationVersion(__version__)
         self.setOrganizationName("CellSeek Team")
 
@@ -48,7 +46,7 @@ class CellSeekApp(QApplication):
         self.setStyleSheet(self._get_dark_theme())
 
         # Create main window
-        self.main_window = MainWindow()
+        self.main_window = NewMainWindow()
         self.main_window.show()
 
     def _get_dark_theme(self):
@@ -66,26 +64,8 @@ class CellSeekApp(QApplication):
             font-size: 9pt;
         }
         
-        QTabWidget::pane {
-            border: 1px solid #3d3d3d;
-            background-color: #353535;
-        }
-        
-        QTabBar::tab {
-            background-color: #404040;
-            color: #ffffff;
-            padding: 8px 16px;
-            margin-right: 2px;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-        }
-        
-        QTabBar::tab:selected {
-            background-color: #0078d4;
-        }
-        
-        QTabBar::tab:hover {
-            background-color: #505050;
+        QStackedWidget {
+            background-color: #2b2b2b;
         }
         
         QPushButton {
@@ -147,15 +127,24 @@ class CellSeekApp(QApplication):
             padding: 0 5px 0 5px;
         }
         
-        QListWidget, QTreeWidget, QTableWidget {
+        QListWidget {
             background-color: #353535;
             border: 1px solid #606060;
             border-radius: 4px;
             alternate-background-color: #404040;
         }
         
-        QListWidget::item:selected, QTreeWidget::item:selected, QTableWidget::item:selected {
+        QListWidget::item {
+            padding: 4px;
+            border-bottom: 1px solid #505050;
+        }
+        
+        QListWidget::item:selected {
             background-color: #0078d4;
+        }
+        
+        QListWidget::item:hover {
+            background-color: #454545;
         }
         
         QScrollBar:vertical {
@@ -174,35 +163,52 @@ class CellSeekApp(QApplication):
             background: #707070;
         }
         
-        QMenuBar {
-            background-color: #353535;
-            border-bottom: 1px solid #606060;
-        }
-        
-        QMenuBar::item {
-            padding: 4px 8px;
-        }
-        
-        QMenuBar::item:selected {
-            background-color: #0078d4;
-        }
-        
-        QMenu {
-            background-color: #353535;
-            border: 1px solid #606060;
-        }
-        
-        QMenu::item {
-            padding: 4px 16px;
-        }
-        
-        QMenu::item:selected {
-            background-color: #0078d4;
-        }
-        
         QStatusBar {
             background-color: #353535;
             border-top: 1px solid #606060;
+        }
+        
+        QLabel {
+            background: transparent;
+            border: none;
+        }
+        
+        QRadioButton {
+            spacing: 8px;
+        }
+        
+        QRadioButton::indicator {
+            width: 13px;
+            height: 13px;
+        }
+        
+        QRadioButton::indicator:unchecked {
+            border: 2px solid #606060;
+            border-radius: 7px;
+            background-color: #404040;
+        }
+        
+        QRadioButton::indicator:checked {
+            border: 2px solid #0078d4;
+            border-radius: 7px;
+            background-color: #0078d4;
+        }
+        
+        QCheckBox::indicator {
+            width: 13px;
+            height: 13px;
+        }
+        
+        QCheckBox::indicator:unchecked {
+            border: 2px solid #606060;
+            border-radius: 2px;
+            background-color: #404040;
+        }
+        
+        QCheckBox::indicator:checked {
+            border: 2px solid #0078d4;
+            border-radius: 2px;
+            background-color: #0078d4;
         }
         """
 

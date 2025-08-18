@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
 """
-CellSeek GUI Application Entry Point - Frame-by-Frame Interface
-
-This script launches the new CellSeek frame-by-frame GUI application for cell segmentation and tracking.
+New launcher for the frame-by-frame GUI application
 """
 
 import sys
@@ -26,7 +23,7 @@ __version__ = "2.0.0"
 __author__ = "CellSeek Team"
 
 
-class CellSeekApp(QApplication):
+class CellSeekFrameByFrameApp(QApplication):
     """Frame-by-frame application class for CellSeek GUI"""
 
     def __init__(self, argv):
@@ -214,20 +211,9 @@ class CellSeekApp(QApplication):
 
 
 def main():
-    """Main entry point for the CellSeek GUI application"""
-    try:
-        app = CellSeekApp(sys.argv)
-        sys.exit(app.exec())
-
-    except ImportError as e:
-        print(f"Failed to import GUI modules: {e}")
-        print("\nPlease ensure PyQt6 is installed:")
-        print("pip install PyQt6")
-        sys.exit(1)
-
-    except Exception as e:
-        print(f"Failed to start CellSeek GUI: {e}")
-        sys.exit(1)
+    """Entry point for the frame-by-frame CellSeek GUI application"""
+    app = CellSeekFrameByFrameApp(sys.argv)
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
