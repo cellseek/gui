@@ -18,7 +18,7 @@ class CutieService:
 
     @property
     def cutie_worker(self) -> Optional[CutieWorker]:
-        """Lazy initialization of CUTIE worker"""
+        """Initialize CUTIE worker on demand"""
         if self._cutie_worker is None:
             try:
                 self._cutie_worker = CutieWorker()

@@ -8,7 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 class CellSamWorker(QThread):
     """Worker thread for running CellSAM processing on first frame only"""
 
-    progress_update = pyqtSignal(int, str)  # progress, status
+    status_update = pyqtSignal(str)  # status message
     processing_complete = pyqtSignal(
         list, dict
     )  # frame_paths, first_frame_segmentation
@@ -26,12 +26,12 @@ class CellSamWorker(QThread):
     def run(self):
         """Run CellSAM processing on first frame only"""
         try:
-            self.progress_update.emit(0, "Initializing CellSAM model...")
+            self.status_update.emit("Initializing CellSAM model...")
 
             # Initialize CellSAM model
             model = CellSAM(gpu=True)
 
-            self.progress_update.emit(30, "Model loaded. Processing first frame...")
+            self.status_update.emit("Model loaded. Processing first frame...")
 
             if self._cancelled or not self.frame_paths:
                 return
@@ -50,7 +50,7 @@ class CellSamWorker(QThread):
             # Convert BGR to RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            self.progress_update.emit(60, "Running segmentation on first frame...")
+            self.status_update.emit("Running segmentation on first frame...")
 
             # Run segmentation on first frame
             masks, flows, styles = model.segment(img, diameter=None)
@@ -64,12 +64,12 @@ class CellSamWorker(QThread):
                 "original_image": img,
             }
 
-            self.progress_update.emit(90, "Cleaning up model...")
+            self.status_update.emit("Cleaning up CellSAM model...")
 
             # Clean up model to free memory
             del model
 
-            self.progress_update.emit(100, "First frame processing complete!")
+            self.status_update.emit("First frame processing complete!")
 
             if not self._cancelled:
                 self.processing_complete.emit(self.frame_paths, first_frame_result)

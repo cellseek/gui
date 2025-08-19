@@ -8,7 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 class CutieWorker(QThread):
     """Worker thread for CUTIE tracking"""
 
-    progress_update = pyqtSignal(int, str)  # progress, status
+    status_update = pyqtSignal(str)  # status message
     tracking_complete = pyqtSignal(dict)  # results: {frame_idx: masks}
     frame_tracked = pyqtSignal(
         int, np.ndarray
@@ -80,7 +80,7 @@ class CutieWorker(QThread):
         if current_image is None:
             raise ValueError("Current image is required for tracking")
 
-        self.progress_update.emit(0, f"Tracking frame {frame_index + 1}...")
+        self.status_update.emit(f"Tracking frame {frame_index + 1}...")
 
         # Use the new track method that handles both steps internally
         try:
@@ -90,12 +90,11 @@ class CutieWorker(QThread):
         except Exception as e:
             raise RuntimeError(f"Failed to track frame: {e}")
 
-        self.progress_update.emit(100, "Frame tracking complete!")
+        self.status_update.emit("Frame tracking complete!")
 
         if not self._cancelled:
             self.frame_tracked.emit(frame_index, predicted_mask)
 
-        return predicted_mask
         return predicted_mask
 
     def cleanup(self):

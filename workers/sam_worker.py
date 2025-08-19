@@ -8,6 +8,7 @@ class SamWorker(QThread):
     """Worker thread for SAM operations"""
 
     sam_complete = pyqtSignal(np.ndarray, float)  # mask, score
+    status_update = pyqtSignal(str)  # status message
     error_occurred = pyqtSignal(str)  # error message
 
     def __init__(self):
@@ -27,6 +28,10 @@ class SamWorker(QThread):
             self.predictor = SamPredictor(sam)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize SAM: {e}")
+
+    def emit_initialization_complete(self):
+        """Emit status update after initialization (called after signal connections)"""
+        self.status_update.emit("SAM model loaded successfully")
 
     def cancel(self):
         """Cancel the operation"""

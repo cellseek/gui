@@ -13,11 +13,11 @@ class CellSamServiceDelegate(Protocol):
     """Protocol for objects that can delegate CellSAM operations"""
 
     def emit_status_update(self, message: str) -> None: ...
-    def emit_progress_update(self, progress: int, message: str) -> None: ...
     def show_error(self, title: str, message: str) -> None: ...
     def on_cellsam_processing_complete(
         self, frame_paths: List[str], first_frame_result: dict
     ) -> None: ...
+    def initialize_tracking_models(self) -> None: ...
 
 
 class CellSamService:
@@ -50,7 +50,7 @@ class CellSamService:
         try:
             # Create and configure worker
             self._cellsam_worker = CellSamWorker(frame_paths)
-            self._cellsam_worker.progress_update.connect(self._on_progress_update)
+            self._cellsam_worker.status_update.connect(self._on_status_update)
             self._cellsam_worker.processing_complete.connect(
                 self._on_processing_complete
             )
@@ -86,9 +86,9 @@ class CellSamService:
             self._cellsam_worker.cancel()
             self._cellsam_worker = None
 
-    def _on_progress_update(self, progress: int, status: str) -> None:
-        """Handle progress updates from CellSAM worker"""
-        self.delegate.emit_progress_update(progress, status)
+    def _on_status_update(self, status: str) -> None:
+        """Handle status updates from CellSAM worker"""
+        self.delegate.emit_status_update(status)
 
     def _on_processing_complete(
         self, frame_paths: List[str], first_frame_result: dict
@@ -103,10 +103,8 @@ class CellSamService:
                 frame_paths, first_frame_result
             )
 
-            # Update status
-            self.delegate.emit_status_update(
-                f"First frame segmented - Loaded {len(frame_paths)} frames for tracking"
-            )
+            # Initialize tracking models after CellSAM completion
+            self.delegate.initialize_tracking_models()
 
         except Exception as e:
             self.delegate.show_error(

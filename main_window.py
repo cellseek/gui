@@ -100,7 +100,6 @@ class MainWindow(QMainWindow):
 
         # Frame-by-frame connections
         self.frame_by_frame_widget.status_update.connect(self.on_status_update)
-        self.frame_by_frame_widget.progress_update.connect(self.on_progress_update)
 
     def center_on_screen(self):
         """Position the window at the center of the screen"""
@@ -120,13 +119,19 @@ class MainWindow(QMainWindow):
         """Handle status updates"""
         self.status_label.setText(message)
 
-    def emit_progress_update(self, progress: int, message: str) -> None:
-        """Handle progress updates"""
-        self.status_label.setText(f"{message} ({progress}%)")
-
     def show_error(self, title: str, message: str) -> None:
         """Show error message box"""
         QMessageBox.critical(self, title, message)
+
+    def initialize_tracking_models(self) -> None:
+        """Initialize SAM and CUTIE models after CellSAM processing"""
+        try:
+            self.emit_status_update("Initializing tracking models...")
+            # Initialize models in frame-by-frame widget
+            self.frame_by_frame_widget.initialize_models()
+            self.emit_status_update("Tracking models loaded successfully")
+        except Exception as e:
+            self.show_error("Error", f"Failed to initialize tracking models: {str(e)}")
 
     def on_cellsam_processing_complete(
         self, frame_paths: List[str], first_frame_result: dict
@@ -147,12 +152,6 @@ class MainWindow(QMainWindow):
     def on_status_update(self, message: str):
         """Handle status updates"""
         self.status_label.setText(message)
-
-    def on_progress_update(self, progress: int, message: str):
-        """Handle progress updates"""
-        # For now, just update status
-        # Could add a progress bar to status bar if needed
-        self.status_label.setText(f"{message} ({progress}%)")
 
     def update_memory_usage(self):
         """Update memory usage display"""
@@ -179,7 +178,6 @@ class MainWindow(QMainWindow):
 
             # Reconnect signals
             self.frame_by_frame_widget.status_update.connect(self.on_status_update)
-            self.frame_by_frame_widget.progress_update.connect(self.on_progress_update)
 
             # Switch to import screen
             self.stacked_widget.setCurrentIndex(0)

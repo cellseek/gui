@@ -35,7 +35,6 @@ class FrameByFrameWidget(QWidget):
 
     # Signals
     status_update = pyqtSignal(str)
-    progress_update = pyqtSignal(int, str)  # progress, message
 
     def __init__(self):
         super().__init__()
@@ -45,6 +44,9 @@ class FrameByFrameWidget(QWidget):
         self.annotation_service = AnnotationService(self)
         self.sam_service = SamService(self)
         self.cutie_service = CutieService()
+
+        # Models will be initialized later via initialize_models()
+        self._models_initialized = False
 
         # Setup UI
         self.setup_ui()
@@ -278,6 +280,27 @@ class FrameByFrameWidget(QWidget):
             f"Loaded {len(image_paths)} frames. Found {cell_count} cells in first frame. Ready for tracking."
         )
 
+    def initialize_models(self):
+        """Initialize SAM and CUTIE models for tracking"""
+        if self._models_initialized:
+            return
+
+        try:
+            # Initialize SAM worker (will emit its own status updates)
+            if self.sam_service.sam_worker is None:
+                raise RuntimeError("Failed to initialize SAM model")
+
+            self.status_update.emit("Loading CUTIE model...")
+            # Initialize CUTIE worker
+            if self.cutie_service.cutie_worker is None:
+                raise RuntimeError("Failed to initialize CUTIE model")
+
+            self._models_initialized = True
+            self.status_update.emit("CUTIE model loaded successfully")
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize models: {str(e)}")
+
     def update_display(self):
         """Update the image display"""
         if self.storage_service.get_frame_count() == 0:
@@ -390,6 +413,14 @@ class FrameByFrameWidget(QWidget):
         """Delegate for annotation service"""
         return self.storage_service.get_current_frame_index()
 
+    def get_frame_count(self) -> int:
+        """Delegate for annotation and SAM services"""
+        return self.storage_service.get_frame_count()
+
+    def remove_masks_after_frame(self, frame_index: int) -> int:
+        """Delegate for annotation service"""
+        return self.storage_service.remove_masks_after_frame(frame_index)
+
     def emit_status_update(self, message: str) -> None:
         """Delegate for annotation service"""
         self.status_update.emit(message)
@@ -420,10 +451,6 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label.set_masks(masks)
 
     # SamService delegates
-    def get_frame_count(self) -> int:
-        """Delegate for SAM service"""
-        return self.storage_service.get_frame_count()
-
     def get_current_frame(self) -> Optional[np.ndarray]:
         """Delegate for SAM service"""
         return self.storage_service.get_current_frame()

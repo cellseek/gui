@@ -16,6 +16,8 @@ class AnnotationServiceDelegate(Protocol):
     def get_current_frame_masks(self) -> np.ndarray | None: ...
     def set_mask_for_frame(self, frame_index: int, masks: np.ndarray) -> None: ...
     def get_current_frame_index(self) -> int: ...
+    def get_frame_count(self) -> int: ...
+    def remove_masks_after_frame(self, frame_index: int) -> int: ...
     def emit_status_update(self, message: str) -> None: ...
     def show_message_box(
         self, title: str, message: str, box_type: str = "information"
@@ -29,6 +31,24 @@ class AnnotationService:
 
     def __init__(self, delegate: AnnotationServiceDelegate):
         self.delegate = delegate
+
+    def _handle_mask_edit_consequences(self, current_frame_index: int) -> None:
+        """
+        Handle the consequences of editing a mask by removing all subsequent masks.
+
+        Args:
+            current_frame_index: The frame index where the mask was edited
+        """
+        # Only remove subsequent masks if this is not the last frame
+        total_frames = self.delegate.get_frame_count()
+        if current_frame_index < total_frames - 1:
+            removed_count = self.delegate.remove_masks_after_frame(current_frame_index)
+            if removed_count > 0:
+                last_removed_frame = current_frame_index + removed_count
+                self.delegate.emit_status_update(
+                    f"Mask edited: removed {removed_count} dependent masks "
+                    f"(frames {current_frame_index + 2}-{last_removed_frame + 1})"
+                )
 
     def set_annotation_mode(self, image_widget, mode: AnnotationMode) -> None:
         """Set the annotation mode"""
@@ -51,6 +71,9 @@ class AnnotationService:
                 self.delegate.update_current_display_masks(current_masks)
 
                 self.delegate.emit_status_update(f"Removed mask {mask_id}")
+
+                # Handle consequences of mask editing
+                self._handle_mask_edit_consequences(current_index)
 
     def on_cell_id_edit_requested(
         self, point: Tuple[int, int], current_cell_id: int
@@ -95,3 +118,6 @@ class AnnotationService:
                 self.delegate.emit_status_update(
                     f"Changed cell ID from {current_cell_id} to {new_id}"
                 )
+
+                # Handle consequences of mask editing
+                self._handle_mask_edit_consequences(current_index)

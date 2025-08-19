@@ -115,6 +115,25 @@ class StorageService:
         if frame_index in self._frame_masks:
             del self._frame_masks[frame_index]
 
+    def remove_masks_after_frame(self, frame_index: int) -> int:
+        """
+        Remove all masks after the specified frame index.
+
+        Args:
+            frame_index: The frame index after which to remove masks
+
+        Returns:
+            Number of masks removed
+        """
+        frames_to_remove = [
+            idx for idx in self._frame_masks.keys() if idx > frame_index
+        ]
+
+        for idx in frames_to_remove:
+            del self._frame_masks[idx]
+
+        return len(frames_to_remove)
+
     def clear_all_masks(self) -> None:
         """Clear all masks"""
         self._frame_masks.clear()

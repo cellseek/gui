@@ -17,6 +17,7 @@ class SamServiceDelegate(Protocol):
     def get_current_frame_masks(self) -> np.ndarray | None: ...
     def set_mask_for_frame(self, frame_index: int, masks: np.ndarray) -> None: ...
     def get_current_frame_index(self) -> int: ...
+    def remove_masks_after_frame(self, frame_index: int) -> int: ...
     def emit_status_update(self, message: str) -> None: ...
     def show_warning(self, title: str, message: str) -> None: ...
     def update_current_display_masks(self, masks: np.ndarray) -> None: ...
@@ -34,13 +35,21 @@ class SamService:
 
     @property
     def sam_worker(self) -> Optional[SamWorker]:
-        """Lazy initialization of SAM worker"""
+        """Initialize SAM worker on demand"""
         if self._sam_worker is None:
             try:
+                self.delegate.emit_status_update("Loading SAM model...")
                 self._sam_worker = SamWorker()
+                # Connect status updates
+                self._sam_worker.status_update.connect(
+                    lambda msg: self.delegate.emit_status_update(msg)
+                )
+                # Emit initialization complete status
+                self._sam_worker.emit_initialization_complete()
                 print("SAM worker initialized successfully")
             except Exception as e:
                 print(f"Failed to initialize SAM worker: {str(e)}")
+                self.delegate.emit_status_update(f"SAM initialization failed: {str(e)}")
                 return None
         return self._sam_worker
 
@@ -161,6 +170,17 @@ class SamService:
         self.delegate.update_current_display_masks(current_masks)
 
         self.delegate.emit_status_update(f"Added mask {next_id} (score: {score:.3f})")
+
+        # Handle consequences of mask modification - remove subsequent masks
+        total_frames = self.delegate.get_frame_count()
+        if current_index < total_frames - 1:
+            removed_count = self.delegate.remove_masks_after_frame(current_index)
+            if removed_count > 0:
+                last_removed_frame = current_index + removed_count
+                self.delegate.emit_status_update(
+                    f"Added mask {next_id}: removed {removed_count} dependent masks "
+                    f"(frames {current_index + 2}-{last_removed_frame + 1})"
+                )
 
     def on_sam_error(self, error_message: str) -> None:
         """Handle SAM error"""
