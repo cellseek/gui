@@ -2,23 +2,15 @@
 Frame-by-frame segmentation and tracking widget
 """
 
-import os
-import sys
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-import torch
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
-    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -26,16 +18,13 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
-    QScrollArea,
-    QSlider,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
-# Import CUTIE tracker
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "cutie"))
-from cutie.cutie_tracker import CutieTracker
+from workers.cutie_worker import CutieWorker
+from workers.sam_worker import SAMWorker
 
 
 class AnnotationMode(Enum):
@@ -46,217 +35,6 @@ class AnnotationMode(Enum):
     BOX_ADD = "box_add"
     MASK_REMOVE = "mask_remove"
     EDIT_CELL_ID = "edit_cell_id"
-
-
-class CellSAMWorker(QThread):
-    """Worker thread for CellSAM segmentation"""
-
-    progress_update = pyqtSignal(str)  # status message
-    segmentation_complete = pyqtSignal(dict)  # results
-    error_occurred = pyqtSignal(str)  # error message
-
-    def __init__(self, image: np.ndarray, parameters: Dict[str, Any]):
-        super().__init__()
-        self.image = image
-        self.parameters = parameters
-        self._cancelled = False
-
-    def cancel(self):
-        """Cancel the segmentation"""
-        self._cancelled = True
-
-    def run(self):
-        """Run CellSAM segmentation in background thread"""
-        try:
-            self.progress_update.emit("Initializing CellSAM...")
-
-            # Import CellSAM
-            from cellsam import CellSAM
-
-            # Initialize model
-            device = self.parameters.get("device", "auto")
-            if device == "auto":
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-            model = CellSAM(device=device)
-
-            if self._cancelled:
-                return
-
-            self.progress_update.emit("Running segmentation...")
-
-            # Run segmentation
-            masks, flows, styles = model.segment(
-                self.image,
-                diameter=self.parameters.get("diameter", 30.0),
-                flow_threshold=self.parameters.get("flow_threshold", 0.4),
-                cellprob_threshold=self.parameters.get("cellprob_threshold", 0.0),
-                normalize=True,
-            )
-
-            if self._cancelled:
-                return
-
-            # Create results
-            results = {
-                "masks": masks,
-                "flows": flows,
-                "styles": styles,
-                "cell_count": np.max(masks) if masks.size > 0 else 0,
-                "parameters": self.parameters.copy(),
-            }
-
-            self.progress_update.emit("Segmentation completed")
-            self.segmentation_complete.emit(results)
-
-        except Exception as e:
-            self.error_occurred.emit(f"Segmentation failed: {str(e)}")
-
-
-class SAMWorker(QThread):
-    """Worker thread for SAM operations"""
-
-    sam_complete = pyqtSignal(np.ndarray, float)  # mask, score
-    error_occurred = pyqtSignal(str)  # error message
-
-    def __init__(self, image: np.ndarray, operation: str, **kwargs):
-        super().__init__()
-        self.image = image
-        self.operation = operation
-        self.kwargs = kwargs
-        self._cancelled = False
-
-    def cancel(self):
-        """Cancel the operation"""
-        self._cancelled = True
-
-    def run(self):
-        """Run SAM operation in background thread"""
-        try:
-            # Import SAM
-            from segment_anything import SamPredictor, sam_model_registry
-
-            # Initialize SAM
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-            # Load SAM model (you may need to adjust the model type and checkpoint path)
-            sam = sam_model_registry["vit_h"](
-                checkpoint="checkpoints/sam_vit_h_4b8939.pth"
-            )
-            sam.to(device)
-            predictor = SamPredictor(sam)
-
-            if self._cancelled:
-                return
-
-            # Set the image for the predictor
-            predictor.set_image(self.image)
-
-            if self.operation == "point":
-                point = self.kwargs["point"]
-                input_point = np.array([point])
-                input_label = np.array([1])
-
-                masks, scores, logits = predictor.predict(
-                    point_coords=input_point,
-                    point_labels=input_label,
-                    multimask_output=True,
-                )
-
-                # Use the best mask (highest score)
-                best_idx = np.argmax(scores)
-                mask = masks[best_idx]
-                score = scores[best_idx]
-
-            elif self.operation == "box":
-                box = self.kwargs["box"]
-                input_box = np.array([box])  # [x1, y1, x2, y2]
-
-                masks, scores, logits = predictor.predict(
-                    box=input_box,
-                    multimask_output=False,
-                )
-
-                mask = masks[0]
-                score = scores[0]
-            else:
-                raise ValueError(f"Unknown operation: {self.operation}")
-
-            if not self._cancelled:
-                self.sam_complete.emit(mask, score)
-
-        except Exception as e:
-            self.error_occurred.emit(f"SAM operation failed: {str(e)}")
-
-
-class CutieTrackingWorker(QThread):
-    """Worker thread for CUTIE tracking"""
-
-    progress_update = pyqtSignal(int, str)  # progress, status
-    tracking_complete = pyqtSignal(dict)  # results: {frame_idx: masks}
-    error_occurred = pyqtSignal(str)  # error message
-
-    def __init__(self, frames: List[np.ndarray], first_frame_masks: np.ndarray):
-        super().__init__()
-        self.frames = frames
-        self.first_frame_masks = first_frame_masks
-        self._cancelled = False
-
-    def cancel(self):
-        """Cancel the tracking"""
-        self._cancelled = True
-
-    def run(self):
-        """Run CUTIE tracking on all frames"""
-        try:
-            self.progress_update.emit(0, "Initializing CUTIE tracker...")
-
-            # Initialize CUTIE tracker
-            tracker = CutieTracker()
-
-            self.progress_update.emit(10, "Setting up first frame...")
-
-            # Convert first frame masks to CUTIE format
-            first_frame = self.frames[0]
-
-            # Initialize tracker with first frame and masks
-            tracker.step(first_frame, self.first_frame_masks)
-
-            tracking_results = {0: self.first_frame_masks}
-
-            self.progress_update.emit(20, "Tracking subsequent frames...")
-
-            # Track through all subsequent frames
-            for i in range(1, len(self.frames)):
-                if self._cancelled:
-                    break
-
-                frame = self.frames[i]
-
-                # Track frame using CUTIE
-                masks = tracker.step(frame)
-                tracking_results[i] = masks
-
-                # Update progress
-                progress = 20 + int((i / (len(self.frames) - 1)) * 70)
-                self.progress_update.emit(
-                    progress, f"Tracked frame {i+1}/{len(self.frames)}"
-                )
-
-            self.progress_update.emit(95, "Finalizing tracking results...")
-
-            # Clean up tracker
-            del tracker
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            self.progress_update.emit(100, "Tracking complete!")
-
-            if not self._cancelled:
-                self.tracking_complete.emit(tracking_results)
-
-        except Exception as e:
-            self.error_occurred.emit(f"CUTIE tracking failed: {str(e)}")
 
 
 class InteractiveImageLabel(QLabel):
@@ -639,13 +417,6 @@ class FrameByFrameWidget(QWidget):
         self.next_button.setEnabled(False)
         layout.addWidget(self.next_button)
 
-        # Auto-segment button (hidden from user - only runs automatically on first frame)
-        self.auto_segment_button = QPushButton("Auto Segment (S)")
-        self.auto_segment_button.clicked.connect(self.run_cellsam)
-        self.auto_segment_button.setEnabled(False)
-        self.auto_segment_button.setVisible(False)  # Hide from user interface
-        layout.addWidget(self.auto_segment_button)
-
         parent_layout.addWidget(control_group)
 
     def setup_image_panel(self, parent_layout):
@@ -663,6 +434,13 @@ class FrameByFrameWidget(QWidget):
         prev_layout.addWidget(QLabel("Previous Frame:"))
         self.prev_image_label = InteractiveImageLabel()
         self.prev_image_label.setEnabled(False)  # Non-interactive
+        # Make both image displays expand to fill available space equally
+        from PyQt6.QtWidgets import QSizePolicy
+
+        size_policy = QSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.prev_image_label.setSizePolicy(size_policy)
         prev_layout.addWidget(self.prev_image_label)
         splitter.addWidget(prev_panel)
 
@@ -677,6 +455,8 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label.cell_id_edit_requested.connect(
             self.on_cell_id_edit_requested
         )
+        # Make both image displays expand to fill available space equally
+        self.curr_image_label.setSizePolicy(size_policy)
         curr_layout.addWidget(self.curr_image_label)
         splitter.addWidget(curr_panel)
 
@@ -788,8 +568,6 @@ class FrameByFrameWidget(QWidget):
             self.update_display()
             self.status_update.emit(f"Loaded {len(self.frames)} frames")
 
-            # Automatically run CellSAM on the first frame
-            self.auto_run_cellsam_on_first_frame()
         else:
             QMessageBox.warning(self, "Load Error", "No valid frames loaded")
 
@@ -906,7 +684,7 @@ class FrameByFrameWidget(QWidget):
             self.status_update.emit("Initializing CUTIE tracking...")
 
             # Start CUTIE tracking worker
-            self.cutie_worker = CutieTrackingWorker(self.frames, first_frame_masks)
+            self.cutie_worker = CutieWorker(self.frames, first_frame_masks)
             self.cutie_worker.progress_update.connect(self.on_cutie_progress)
             self.cutie_worker.tracking_complete.connect(self.on_cutie_complete)
             self.cutie_worker.error_occurred.connect(self.on_cutie_error)
@@ -953,15 +731,6 @@ class FrameByFrameWidget(QWidget):
         self.cutie_worker = None
         QMessageBox.critical(self, "CUTIE Error", error_message)
         self.status_update.emit("Cell tracking failed")
-
-    def auto_run_cellsam_on_first_frame(self):
-        """Automatically run CellSAM on the first frame"""
-        if not self.first_frame_segmented and self.current_frame_index == 0:
-            self.status_update.emit("Running automatic segmentation on first frame...")
-            # Set flag to prevent running again
-            self.first_frame_segmented = True
-            # Run CellSAM on the first frame
-            self.run_cellsam()
 
     def update_display(self):
         """Update the image display"""
@@ -1041,9 +810,12 @@ class FrameByFrameWidget(QWidget):
                         predicted_mask = self.cutie_tracker.step(
                             next_frame, current_mask
                         )
+
                     else:
-                        # Step without mask (shouldn't happen normally)
-                        predicted_mask = self.cutie_tracker.step(next_frame)
+                        # No current mask available - cannot track without reference
+                        raise RuntimeError(
+                            f"Cannot track frame {next_index + 1}: no reference mask available from frame {self.current_frame_index + 1}"
+                        )
 
                     # Store the prediction
                     self.frame_masks[next_index] = predicted_mask
@@ -1060,88 +832,6 @@ class FrameByFrameWidget(QWidget):
             # Move to next frame
             self.current_frame_index = next_index
             self.update_display()
-
-    def run_cellsam(self):
-        """Run CellSAM segmentation on current frame (only allowed on first frame)"""
-        if not self.frames or self.cellsam_worker is not None:
-            return
-
-        # Only allow CellSAM on the first frame
-        if self.current_frame_index != 0:
-            QMessageBox.information(
-                self,
-                "CellSAM Restriction",
-                "CellSAM automatic segmentation only runs on the first frame.\n"
-                "Use manual SAM tools for corrections on subsequent frames.",
-            )
-            return
-
-        current_image = self.frames[self.current_frame_index]
-
-        # Get parameters - using default values
-        parameters = {
-            "diameter": 30.0,  # Default value
-            "flow_threshold": 0.4,  # Default value
-            "cellprob_threshold": 0.0,
-            "device": "auto",
-        }
-
-        # Start worker
-        self.cellsam_worker = CellSAMWorker(current_image, parameters)
-        self.cellsam_worker.progress_update.connect(self.on_cellsam_progress)
-        self.cellsam_worker.segmentation_complete.connect(self.on_cellsam_complete)
-        self.cellsam_worker.error_occurred.connect(self.on_cellsam_error)
-        self.cellsam_worker.start()
-
-        # Update UI
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Indeterminate
-        # Note: auto_segment_button is already disabled and hidden
-
-    def on_cellsam_progress(self, message: str):
-        """Handle CellSAM progress updates"""
-        self.status_label.setText(message)
-
-    def on_cellsam_complete(self, results: dict):
-        """Handle CellSAM completion"""
-        self.cellsam_worker = None
-        self.progress_bar.setVisible(False)
-        # Note: auto_segment_button remains disabled and hidden
-
-        # Store results
-        self.cellsam_results[self.current_frame_index] = results
-        self.frame_masks[self.current_frame_index] = results["masks"]
-
-        # Initialize CUTIE tracker with first frame
-        if self.current_frame_index == 0 and self.cutie_tracker is None:
-            try:
-                self.cutie_tracker = CutieTracker()
-                # Initialize tracker with first frame and masks
-                first_frame = self.frames[0]
-                first_mask = results["masks"]
-                self.cutie_tracker.step(first_frame, first_mask)
-                self.status_update.emit("CUTIE tracker initialized with first frame")
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Tracker Error",
-                    f"Failed to initialize CUTIE tracker: {str(e)}",
-                )
-
-        # Update display
-        self.curr_image_label.set_masks(results["masks"])
-
-        cell_count = results["cell_count"]
-        self.status_label.setText(f"CellSAM completed: {cell_count} cells detected")
-
-    def on_cellsam_error(self, error_message: str):
-        """Handle CellSAM error"""
-        self.cellsam_worker = None
-        self.progress_bar.setVisible(False)
-        # Note: auto_segment_button remains disabled and hidden
-
-        self.status_label.setText("CellSAM failed")
-        QMessageBox.critical(self, "CellSAM Error", error_message)
 
     def on_point_clicked(self, point: Tuple[int, int]):
         """Handle point click for SAM segmentation"""
