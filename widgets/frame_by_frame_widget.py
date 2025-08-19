@@ -185,7 +185,8 @@ class FrameByFrameWidget(QWidget):
         prev_layout = QVBoxLayout(prev_panel)
         prev_layout.addWidget(QLabel("Previous Frame:"))
         self.prev_image_label = InteractiveFrameWidget()
-        self.prev_image_label.setEnabled(False)  # Non-interactive
+        # Keep it enabled but set to VIEW mode to make it non-interactive
+        self.prev_image_label.set_annotation_mode(AnnotationMode.VIEW)
 
         size_policy = QSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -256,9 +257,6 @@ class FrameByFrameWidget(QWidget):
         # Set image paths for lazy loading
         self.storage_service.set_image_paths(image_paths)
 
-        # Store first frame segmentation results
-        self.storage_service.set_cellsam_result_for_frame(0, first_frame_result)
-
         # Extract first frame masks
         first_frame_masks = first_frame_result["masks"]
         if first_frame_masks is not None and first_frame_masks.size > 0:
@@ -278,42 +276,6 @@ class FrameByFrameWidget(QWidget):
         cell_count = np.max(first_frame_masks) if first_frame_masks.size > 0 else 0
         self.status_update.emit(
             f"Loaded {len(image_paths)} frames. Found {cell_count} cells in first frame. Ready for tracking."
-        )
-
-    def load_frames_with_segmentation(
-        self, image_paths: List[str], segmentation_results: List[dict]
-    ):
-        """Load frames with pre-computed segmentation results"""
-        self.storage_service.clear_all_data()
-
-        # Set image paths for lazy loading
-        self.storage_service.set_image_paths(image_paths)
-
-        frame_masks = {}
-        cellsam_results = {}
-
-        # Store the segmentation data (don't load actual images yet)
-        for i, result in enumerate(segmentation_results):
-            try:
-                # Store the masks
-                masks = result["masks"]
-                if masks is not None and masks.size > 0:
-                    frame_masks[i] = masks.astype(np.uint16)
-
-                # Store full CellSAM results for reference
-                cellsam_results[i] = result
-
-            except Exception as e:
-                QMessageBox.warning(
-                    self, "Load Error", f"Failed to load frame {i+1}: {str(e)}"
-                )
-
-        self.storage_service.set_frame_masks(frame_masks)
-        self.storage_service.set_cellsam_results(cellsam_results)
-        self.storage_service.set_current_frame_index(0)
-        self.update_display()
-        self.status_update.emit(
-            f"Loaded {len(image_paths)} frames with segmentation (lazy loading)"
         )
 
     def update_display(self):

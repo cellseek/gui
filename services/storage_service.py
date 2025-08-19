@@ -119,27 +119,6 @@ class StorageService:
         """Clear all masks"""
         self._frame_masks.clear()
 
-    # CellSAM results management
-    def set_cellsam_results(self, results: Dict[int, dict]) -> None:
-        """Set CellSAM results"""
-        self._cellsam_results = results.copy()
-
-    def get_cellsam_results(self) -> Dict[int, dict]:
-        """Get all CellSAM results"""
-        return self._cellsam_results.copy()
-
-    def set_cellsam_result_for_frame(self, frame_index: int, result: dict) -> None:
-        """Set CellSAM result for a specific frame"""
-        self._cellsam_results[frame_index] = result
-
-    def get_cellsam_result_for_frame(self, frame_index: int) -> Optional[dict]:
-        """Get CellSAM result for a specific frame"""
-        return self._cellsam_results.get(frame_index)
-
-    def clear_cellsam_results(self) -> None:
-        """Clear all CellSAM results"""
-        self._cellsam_results.clear()
-
     # Utility methods
     def get_biggest_cell_id(self) -> int:
         """Get the biggest cell ID across all frames"""
@@ -163,5 +142,4 @@ class StorageService:
         """Clear all stored data"""
         self.clear_frames()
         self.clear_all_masks()
-        self.clear_cellsam_results()
         self._current_frame_index = 0

@@ -16,9 +16,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from services.cellsam_service import CellSamService
 from widgets.frame_by_frame_widget import FrameByFrameWidget
 from widgets.media_import_widget import MediaImportWidget
-from workers.cellsam_worker import CellSamWorker
 
 
 class MainWindow(QMainWindow):
@@ -27,8 +27,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        # State
-        self.cellsam_worker = None
+        # Setup services
+        self.cellsam_service = CellSamService(self)
 
         # Setup UI
         self.setup_ui()
@@ -113,31 +113,26 @@ class MainWindow(QMainWindow):
 
     def on_frames_ready(self, frame_paths: List[str]):
         """Handle frames ready from media import - run CellSAM processing"""
-        try:
-            # Start CellSAM processing
-            self.cellsam_worker = CellSamWorker(frame_paths)
-            self.cellsam_worker.progress_update.connect(self.on_cellsam_progress)
-            self.cellsam_worker.processing_complete.connect(self.on_cellsam_complete)
-            self.cellsam_worker.error_occurred.connect(self.on_cellsam_error)
+        self.cellsam_service.process_frames(frame_paths)
 
-            self.cellsam_worker.start()
+    # CellSamServiceDelegate methods
+    def emit_status_update(self, message: str) -> None:
+        """Handle status updates"""
+        self.status_label.setText(message)
 
-            self.status_label.setText("Initializing CellSAM segmentation...")
+    def emit_progress_update(self, progress: int, message: str) -> None:
+        """Handle progress updates"""
+        self.status_label.setText(f"{message} ({progress}%)")
 
-        except Exception as e:
-            QMessageBox.critical(
-                self, "Error", f"Failed to start CellSAM processing: {str(e)}"
-            )
+    def show_error(self, title: str, message: str) -> None:
+        """Show error message box"""
+        QMessageBox.critical(self, title, message)
 
-    def on_cellsam_progress(self, progress: int, status: str):
-        """Handle CellSAM processing progress"""
-        self.status_label.setText(f"{status} ({progress}%)")
-
-    def on_cellsam_complete(self, frame_paths: List[str], first_frame_result: dict):
+    def on_cellsam_processing_complete(
+        self, frame_paths: List[str], first_frame_result: dict
+    ) -> None:
         """Handle CellSAM processing completion"""
         try:
-            self.cellsam_worker = None
-
             # Load frames and first frame segmentation into frame-by-frame widget
             self.frame_by_frame_widget.load_frames_with_first_segmentation(
                 frame_paths, first_frame_result
@@ -146,22 +141,8 @@ class MainWindow(QMainWindow):
             # Switch to frame-by-frame screen
             self.stacked_widget.setCurrentIndex(1)
 
-            # Update status
-            self.status_label.setText(
-                f"First frame segmented - Loaded {len(frame_paths)} frames for tracking"
-            )
-
         except Exception as e:
-            QMessageBox.critical(
-                self, "Error", f"Failed to load processed frames: {str(e)}"
-            )
-
-    def on_cellsam_error(self, error_message: str):
-        """Handle CellSAM processing error"""
-        self.cellsam_worker = None
-
-        QMessageBox.critical(self, "CellSAM Error", error_message)
-        self.status_label.setText("CellSAM processing failed")
+            self.show_error("Error", f"Failed to load processed frames: {str(e)}")
 
     def on_status_update(self, message: str):
         """Handle status updates"""
@@ -188,6 +169,9 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
+            # Cancel any ongoing CellSAM processing
+            self.cellsam_service.cancel_processing()
+
             # Clean up current work
             self.frame_by_frame_widget = FrameByFrameWidget()
             self.stacked_widget.removeWidget(self.stacked_widget.widget(1))
@@ -203,6 +187,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close event"""
+        # Clean up services
+        self.cellsam_service.cleanup()
+
         # Clean up temporary files
         if hasattr(self.media_import_widget, "cleanup"):
             self.media_import_widget.cleanup()

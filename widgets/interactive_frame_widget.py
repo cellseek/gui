@@ -46,7 +46,7 @@ class InteractiveFrameWidget(QLabel):
         self.drawing_box = False
         self.box_start = None
         self.box_end = None
-        
+
         # Enable mouse tracking for hover events
         self.setMouseTracking(True)
 
@@ -98,10 +98,12 @@ class InteractiveFrameWidget(QLabel):
         # Overlay masks if available
         if self.masks is not None:
             display_image = self._overlay_masks(display_image, self.masks)
-            
+
         # Overlay preview mask if available and in click mode
-        if (self.preview_mask is not None and 
-            self.annotation_mode == AnnotationMode.CLICK_ADD):
+        if (
+            self.preview_mask is not None
+            and self.annotation_mode == AnnotationMode.CLICK_ADD
+        ):
             display_image = self._overlay_preview_mask(display_image, self.preview_mask)
 
         # Convert to QPixmap and display
@@ -116,19 +118,21 @@ class InteractiveFrameWidget(QLabel):
         pixmap = QPixmap.fromImage(q_image)
 
         # Calculate scale factor to fit in widget while maintaining aspect ratio
-        scale_x = widget_size.width() / w
-        scale_y = widget_size.height() / h
-        self.scale_factor = min(scale_x, scale_y, 1.0)  # Don't scale up
+        # Add small margin to prevent edge clipping
+        available_width = max(widget_size.width() - 4, 1)  # 2px margin on each side
+        available_height = max(widget_size.height() - 4, 1)  # 2px margin on each side
 
-        if self.scale_factor < 1.0:
-            scaled_pixmap = pixmap.scaled(
-                int(w * self.scale_factor),
-                int(h * self.scale_factor),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        else:
-            scaled_pixmap = pixmap
+        scale_x = available_width / w
+        scale_y = available_height / h
+        self.scale_factor = min(scale_x, scale_y)  # Allow scaling up and down
+
+        # Always scale to fit the widget perfectly
+        scaled_pixmap = pixmap.scaled(
+            max(int(w * self.scale_factor), 1),  # Ensure minimum 1px
+            max(int(h * self.scale_factor), 1),  # Ensure minimum 1px
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
         # Calculate offset to center the image
         self.image_offset = (
@@ -217,6 +221,13 @@ class InteractiveFrameWidget(QLabel):
 
         return overlay
 
+    def resizeEvent(self, event):
+        """Handle widget resize events by updating the display"""
+        super().resizeEvent(event)
+        # Update display when widget is resized to rescale the image
+        if self.image is not None:
+            self.update_display()
+
     def _generate_colors(self, num_colors: int) -> List[Tuple[int, int, int]]:
         """Generate distinct colors for masks"""
         colors = []
@@ -244,11 +255,13 @@ class InteractiveFrameWidget(QLabel):
 
         return colors
 
-    def _overlay_preview_mask(self, image: np.ndarray, preview_mask: np.ndarray) -> np.ndarray:
+    def _overlay_preview_mask(
+        self, image: np.ndarray, preview_mask: np.ndarray
+    ) -> np.ndarray:
         """Overlay preview mask with a semi-transparent cyan color"""
         if preview_mask is None:
             return image
-            
+
         overlay = image.copy()
         # Use cyan color for preview with high transparency
         preview_color = np.array([0, 255, 255], dtype=np.uint8)  # Cyan
@@ -256,7 +269,7 @@ class InteractiveFrameWidget(QLabel):
         if np.any(mask):
             # More transparent preview (0.8 original + 0.2 preview)
             overlay[mask] = (0.8 * overlay[mask] + 0.2 * preview_color).astype(np.uint8)
-        
+
         return overlay
 
     def _widget_to_image_coords(self, widget_x: int, widget_y: int) -> Tuple[int, int]:
