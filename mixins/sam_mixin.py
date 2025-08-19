@@ -10,7 +10,12 @@ from PyQt6.QtWidgets import QMessageBox
 from workers.sam_worker import SamWorker
 
 if TYPE_CHECKING:
-    from protocols.storage_protocol import StorageProtocol, UIProtocol
+    from protocols.interactive_frame_widget_protocol import (
+        InteractiveFrameWidgetProtocol,
+    )
+    from protocols.status_update_signal_protocol import StatusUpdateSignalProtocol
+    from protocols.storage_protocol import StorageProtocol
+    from protocols.ui_protocol import UIProtocol
 
 
 class SamMixin:
@@ -23,12 +28,17 @@ class SamMixin:
         # Initialize SAM worker lazily
         self._sam_worker: Optional[SamWorker] = None
 
-    def _assert_protocols(self) -> None:
-        """Assert that the implementing class provides required protocols"""
-        if TYPE_CHECKING:
-            # Type checker will verify these interfaces exist
-            assert isinstance(self, StorageProtocol)
-            assert isinstance(self, UIProtocol)
+    if TYPE_CHECKING:
+        # Declare that classes using this mixin must implement these protocols
+        # Storage Protocol methods
+        def get_current_frame(self) -> Optional[np.ndarray]: ...
+        def get_current_frame_index(self) -> int: ...
+        def set_mask_for_frame(self, frame_index: int, masks: np.ndarray) -> None: ...
+        def get_current_frame_masks(self) -> Optional[np.ndarray]: ...
+
+        # UI Protocol methods
+        curr_image_label: "InteractiveFrameWidgetProtocol"
+        status_update: "StatusUpdateSignalProtocol"
 
     @property
     def sam_worker(self) -> Optional[SamWorker]:

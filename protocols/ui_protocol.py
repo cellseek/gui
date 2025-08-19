@@ -4,7 +4,7 @@ from protocols.interactive_frame_widget_protocol import InteractiveFrameWidgetPr
 from protocols.status_update_signal_protocol import StatusUpdateSignalProtocol
 
 
-class UIProtocol(Protocol):
+class UiProtocol(Protocol):
     """Protocol defining the UI interface expected by mixins"""
 
     status_update: StatusUpdateSignalProtocol

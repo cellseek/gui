@@ -6,24 +6,15 @@ from typing import TYPE_CHECKING, Tuple
 
 from PyQt6.QtWidgets import QInputDialog, QMessageBox
 
+from protocols.frame_by_frame_widget_protocol import FrameByFrameWidgetProtocol
 from widgets.interactive_frame_widget import AnnotationMode
 
-if TYPE_CHECKING:
-    from protocols.storage_protocol import StorageProtocol, UIProtocol
 
-
-class AnnotationMixin:
+class AnnotationMixin(FrameByFrameWidgetProtocol):
     """Mixin for annotation functionality
 
     Requires the implementing class to provide StorageProtocol and UIProtocol interfaces.
     """
-
-    def _assert_protocols(self) -> None:
-        """Assert that the implementing class provides required protocols"""
-        if TYPE_CHECKING:
-            # Type checker will verify these interfaces exist
-            assert isinstance(self, StorageProtocol)
-            assert isinstance(self, UIProtocol)
 
     def set_annotation_mode(self, mode: AnnotationMode) -> None:
         """Set the annotation mode"""
