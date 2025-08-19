@@ -38,7 +38,6 @@ class InteractiveFrameWidget(QLabel):
         self.overlay_image = None
         self.scale_factor = 1.0
         self.image_offset = (0, 0)
-        self.show_cell_ids = True  # Flag to control cell ID display
 
         # Box drawing
         self.drawing_box = False
@@ -59,11 +58,6 @@ class InteractiveFrameWidget(QLabel):
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif mode == AnnotationMode.BOX_ADD:
             self.setCursor(Qt.CursorShape.CrossCursor)
-
-    def set_show_cell_ids(self, show: bool):
-        """Set whether to display cell IDs on masks"""
-        self.show_cell_ids = show
-        self.update_display()
 
     def set_image(self, image: np.ndarray):
         """Set the base image"""
@@ -139,9 +133,7 @@ class InteractiveFrameWidget(QLabel):
                 color = np.array(colors[obj_id - 1], dtype=np.uint8)
                 overlay[mask] = (0.7 * overlay[mask] + 0.3 * color).astype(np.uint8)
 
-        # Add cell ID text if enabled
-        if self.show_cell_ids:
-            overlay = self._add_cell_id_text(overlay, masks, colors)
+        overlay = self._add_cell_id_text(overlay, masks, colors)
 
         return overlay
 

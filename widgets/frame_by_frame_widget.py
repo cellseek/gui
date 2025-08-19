@@ -495,7 +495,6 @@ class FrameByFrameWidget(QWidget):
         # Update current frame display (right side - editable, no cell IDs for clarity)
         current_image = self.frames[self.current_frame_index]
         self.curr_image_label.set_image(current_image)
-        self.curr_image_label.set_show_cell_ids(False)  # No cell IDs on editable frame
 
         # Set current frame masks if available
         current_masks = self.frame_masks.get(self.current_frame_index)
@@ -505,9 +504,6 @@ class FrameByFrameWidget(QWidget):
         if self.current_frame_index > 0:
             prev_image = self.frames[self.current_frame_index - 1]
             self.prev_image_label.set_image(prev_image)
-            self.prev_image_label.set_show_cell_ids(
-                True
-            )  # Show cell IDs on previous frame
 
             # Set previous frame masks if available
             prev_masks = self.frame_masks.get(self.current_frame_index - 1)
@@ -593,7 +589,7 @@ class FrameByFrameWidget(QWidget):
         self.sam_worker.error_occurred.connect(self.on_sam_error)
         self.sam_worker.start()
 
-        self.status_label.setText(f"Running SAM on point {point}...")
+        self.status_update.emit(f"Running SAM on point {point}...")
 
     def on_box_drawn(self, box: Tuple[int, int, int, int]):
         """Handle box drawing for SAM segmentation"""
@@ -611,7 +607,7 @@ class FrameByFrameWidget(QWidget):
         self.sam_worker.error_occurred.connect(self.on_sam_error)
         self.sam_worker.start()
 
-        self.status_label.setText(f"Running SAM on box {box}...")
+        self.status_update.emit(f"Running SAM on box {box}...")
 
     def on_mask_clicked(self, point: Tuple[int, int]):
         """Handle mask removal"""
@@ -628,7 +624,7 @@ class FrameByFrameWidget(QWidget):
                 self.frame_masks[self.current_frame_index] = current_masks
                 self.curr_image_label.set_masks(current_masks)
 
-                self.status_label.setText(f"Removed mask {mask_id}")
+                self.status_update.emit(f"Removed mask {mask_id}")
 
     def on_sam_complete(self, mask: np.ndarray, score: float):
         """Handle SAM completion"""
@@ -649,12 +645,12 @@ class FrameByFrameWidget(QWidget):
         self.frame_masks[self.current_frame_index] = current_masks
         self.curr_image_label.set_masks(current_masks)
 
-        self.status_label.setText(f"Added mask {next_id} (score: {score:.3f})")
+        self.status_update.emit(f"Added mask {next_id} (score: {score:.3f})")
 
     def on_sam_error(self, error_message: str):
         """Handle SAM error"""
         self.sam_worker = None
-        self.status_label.setText("SAM operation failed")
+        self.status_update.emit("SAM operation failed")
         QMessageBox.warning(self, "SAM Error", error_message)
 
     def on_cell_id_edit_requested(self, point: Tuple[int, int], current_cell_id: int):
@@ -698,7 +694,7 @@ class FrameByFrameWidget(QWidget):
                 self.frame_masks[self.current_frame_index] = current_masks
                 self.curr_image_label.set_masks(current_masks)
 
-                self.status_label.setText(
+                self.status_update.emit(
                     f"Changed cell ID from {current_cell_id} to {new_id}"
                 )
 

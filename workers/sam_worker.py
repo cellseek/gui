@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from PyQt6.QtCore import QThread, pyqtSignal
+from segment_anything import SamPredictor, sam_model_registry
 
 
 class SAMWorker(QThread):
@@ -23,8 +24,6 @@ class SAMWorker(QThread):
     def run(self):
         """Run SAM operation in background thread"""
         try:
-            # Import SAM
-            from segment_anything import SamPredictor, sam_model_registry
 
             # Initialize SAM
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
