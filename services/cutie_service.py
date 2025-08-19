@@ -56,7 +56,7 @@ class CutieService:
                 raise RuntimeError("CUTIE worker is busy")
 
             # Use the step function to get prediction
-            predicted_mask = self._cutie_worker.track(
+            predicted_mask = self._cutie_worker.step(
                 previous_image, previous_mask, current_image, frame_index
             )
 
