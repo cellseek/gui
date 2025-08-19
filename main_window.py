@@ -2,13 +2,10 @@
 New main window for frame-by-frame cell tracking workflow
 """
 
-import os
-import sys
 from typing import List
 
-import cv2
 import psutil
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -100,7 +97,6 @@ class MainWindow(QMainWindow):
         # Media import connections
         self.media_import_widget.frames_ready.connect(self.on_frames_ready)
         self.media_import_widget.status_update.connect(self.on_status_update)
-        self.media_import_widget.progress_update.connect(self.on_progress_update)
 
         # Frame-by-frame connections
         self.frame_by_frame_widget.status_update.connect(self.on_status_update)

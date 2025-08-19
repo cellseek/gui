@@ -2,13 +2,12 @@
 Frame-by-frame segmentation and tracking widget
 """
 
-from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QGroupBox,
@@ -18,324 +17,15 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
+from widgets.interactive_frame_widget import AnnotationMode, InteractiveFrameWidget
 from workers.cutie_worker import CutieWorker
 from workers.sam_worker import SAMWorker
-
-
-class AnnotationMode(Enum):
-    """Annotation mode enumeration"""
-
-    VIEW = "view"
-    CLICK_ADD = "click_add"
-    BOX_ADD = "box_add"
-    MASK_REMOVE = "mask_remove"
-    EDIT_CELL_ID = "edit_cell_id"
-
-
-class InteractiveImageLabel(QLabel):
-    """Interactive image label for annotation"""
-
-    point_clicked = pyqtSignal(tuple)  # (x, y)
-    box_drawn = pyqtSignal(tuple)  # (x1, y1, x2, y2)
-    mask_clicked = pyqtSignal(tuple)  # (x, y) for mask removal
-    cell_id_edit_requested = pyqtSignal(tuple, int)  # (x, y), current_cell_id
-
-    def __init__(self):
-        super().__init__()
-        self.setMinimumSize(400, 400)
-        self.setStyleSheet("border: 1px solid #606060; background-color: #353535;")
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setScaledContents(False)
-
-        # State
-        self.annotation_mode = AnnotationMode.VIEW
-        self.image = None
-        self.masks = None
-        self.overlay_image = None
-        self.scale_factor = 1.0
-        self.image_offset = (0, 0)
-        self.show_cell_ids = True  # Flag to control cell ID display
-
-        # Box drawing
-        self.drawing_box = False
-        self.box_start = None
-        self.box_end = None
-
-    def set_annotation_mode(self, mode: AnnotationMode):
-        """Set the annotation mode"""
-        self.annotation_mode = mode
-
-        if mode == AnnotationMode.VIEW:
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-        elif mode in [
-            AnnotationMode.CLICK_ADD,
-            AnnotationMode.MASK_REMOVE,
-            AnnotationMode.EDIT_CELL_ID,
-        ]:
-            self.setCursor(Qt.CursorShape.CrossCursor)
-        elif mode == AnnotationMode.BOX_ADD:
-            self.setCursor(Qt.CursorShape.CrossCursor)
-
-    def set_show_cell_ids(self, show: bool):
-        """Set whether to display cell IDs on masks"""
-        self.show_cell_ids = show
-        self.update_display()
-
-    def set_image(self, image: np.ndarray):
-        """Set the base image"""
-        self.image = image.copy()
-        self.update_display()
-
-    def set_masks(self, masks: np.ndarray):
-        """Set the segmentation masks"""
-        self.masks = masks.copy() if masks is not None else None
-        self.update_display()
-
-    def update_display(self):
-        """Update the display with image and masks"""
-        if self.image is None:
-            self.clear()
-            return
-
-        # Create display image
-        display_image = self.image.copy()
-
-        # Overlay masks if available
-        if self.masks is not None:
-            display_image = self._overlay_masks(display_image, self.masks)
-
-        # Convert to QPixmap and display
-        h, w = display_image.shape[:2]
-        bytes_per_line = 3 * w
-        q_image = QImage(
-            display_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888
-        )
-
-        # Scale to fit widget
-        widget_size = self.size()
-        pixmap = QPixmap.fromImage(q_image)
-
-        # Calculate scale factor to fit in widget while maintaining aspect ratio
-        scale_x = widget_size.width() / w
-        scale_y = widget_size.height() / h
-        self.scale_factor = min(scale_x, scale_y, 1.0)  # Don't scale up
-
-        if self.scale_factor < 1.0:
-            scaled_pixmap = pixmap.scaled(
-                int(w * self.scale_factor),
-                int(h * self.scale_factor),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        else:
-            scaled_pixmap = pixmap
-
-        # Calculate offset to center the image
-        self.image_offset = (
-            (widget_size.width() - scaled_pixmap.width()) // 2,
-            (widget_size.height() - scaled_pixmap.height()) // 2,
-        )
-
-        self.setPixmap(scaled_pixmap)
-
-    def _overlay_masks(self, image: np.ndarray, masks: np.ndarray) -> np.ndarray:
-        """Overlay masks on image with transparency and optional cell IDs"""
-        if masks is None or np.max(masks) == 0:
-            return image
-
-        overlay = image.copy()
-
-        # Generate colors for each mask
-        num_objects = int(np.max(masks))
-        colors = self._generate_colors(num_objects)
-
-        for obj_id in range(1, num_objects + 1):
-            mask = masks == obj_id
-            if np.any(mask):
-                color = np.array(colors[obj_id - 1], dtype=np.uint8)
-                overlay[mask] = (0.7 * overlay[mask] + 0.3 * color).astype(np.uint8)
-
-        # Add cell ID text if enabled
-        if self.show_cell_ids:
-            overlay = self._add_cell_id_text(overlay, masks, colors)
-
-        return overlay
-
-    def _add_cell_id_text(
-        self, overlay: np.ndarray, masks: np.ndarray, colors: List[Tuple[int, int, int]]
-    ) -> np.ndarray:
-        """Add cell ID text to the overlay"""
-        import cv2
-
-        num_objects = int(np.max(masks))
-
-        for obj_id in range(1, num_objects + 1):
-            mask = masks == obj_id
-            if np.any(mask):
-                # Find centroid of the mask
-                y_coords, x_coords = np.where(mask)
-                if len(y_coords) > 0:
-                    center_y = int(np.mean(y_coords))
-                    center_x = int(np.mean(x_coords))
-
-                    # Choose text color (white or black based on background)
-                    text_color = (255, 255, 255)  # White text
-
-                    # Add text
-                    cv2.putText(
-                        overlay,
-                        str(obj_id),
-                        (center_x - 10, center_y + 5),  # Slight offset for centering
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,  # Font scale
-                        text_color,
-                        2,  # Thickness
-                        cv2.LINE_AA,
-                    )
-
-                    # Add black outline for better visibility
-                    cv2.putText(
-                        overlay,
-                        str(obj_id),
-                        (center_x - 10, center_y + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 0, 0),  # Black outline
-                        4,  # Thicker for outline
-                        cv2.LINE_AA,
-                    )
-
-                    # Add white text on top
-                    cv2.putText(
-                        overlay,
-                        str(obj_id),
-                        (center_x - 10, center_y + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        text_color,
-                        2,
-                        cv2.LINE_AA,
-                    )
-
-        return overlay
-
-    def _generate_colors(self, num_colors: int) -> List[Tuple[int, int, int]]:
-        """Generate distinct colors for masks"""
-        colors = []
-        for i in range(num_colors):
-            hue = (i * 137.508) % 360  # Golden angle approximation
-            # Convert HSV to RGB (simplified)
-            c = 1.0
-            x = c * (1 - abs((hue / 60) % 2 - 1))
-            m = 0
-
-            if 0 <= hue < 60:
-                r, g, b = c, x, 0
-            elif 60 <= hue < 120:
-                r, g, b = x, c, 0
-            elif 120 <= hue < 180:
-                r, g, b = 0, c, x
-            elif 180 <= hue < 240:
-                r, g, b = 0, x, c
-            elif 240 <= hue < 300:
-                r, g, b = x, 0, c
-            else:
-                r, g, b = c, 0, x
-
-            colors.append((int((r + m) * 255), int((g + m) * 255), int((b + m) * 255)))
-
-        return colors
-
-    def _widget_to_image_coords(self, widget_x: int, widget_y: int) -> Tuple[int, int]:
-        """Convert widget coordinates to image coordinates"""
-        if self.image is None:
-            return (0, 0)
-
-        # Account for image offset and scaling
-        image_x = int((widget_x - self.image_offset[0]) / self.scale_factor)
-        image_y = int((widget_y - self.image_offset[1]) / self.scale_factor)
-
-        # Clamp to image bounds
-        image_x = max(0, min(image_x, self.image.shape[1] - 1))
-        image_y = max(0, min(image_y, self.image.shape[0] - 1))
-
-        return (image_x, image_y)
-
-    def mousePressEvent(self, event):
-        """Handle mouse press events"""
-        if self.annotation_mode == AnnotationMode.VIEW:
-            return
-
-        pos = event.position().toPoint()
-        image_coords = self._widget_to_image_coords(pos.x(), pos.y())
-
-        if self.annotation_mode == AnnotationMode.CLICK_ADD:
-            self.point_clicked.emit(image_coords)
-
-        elif self.annotation_mode == AnnotationMode.BOX_ADD:
-            if event.button() == Qt.MouseButton.LeftButton:
-                self.drawing_box = True
-                self.box_start = image_coords
-                self.box_end = image_coords
-
-        elif self.annotation_mode == AnnotationMode.MASK_REMOVE:
-            self.mask_clicked.emit(image_coords)
-
-        elif self.annotation_mode == AnnotationMode.EDIT_CELL_ID:
-            # Get current cell ID at the clicked location
-            if self.masks is not None:
-                x, y = image_coords
-                if 0 <= y < self.masks.shape[0] and 0 <= x < self.masks.shape[1]:
-                    current_cell_id = int(self.masks[y, x])
-                    self.cell_id_edit_requested.emit(image_coords, current_cell_id)
-
-    def mouseMoveEvent(self, event):
-        """Handle mouse move events"""
-        if self.annotation_mode == AnnotationMode.BOX_ADD and self.drawing_box:
-            pos = event.position().toPoint()
-            self.box_end = self._widget_to_image_coords(pos.x(), pos.y())
-            self.update()  # Trigger repaint to show box
-
-    def mouseReleaseEvent(self, event):
-        """Handle mouse release events"""
-        if self.annotation_mode == AnnotationMode.BOX_ADD and self.drawing_box:
-            self.drawing_box = False
-            if self.box_start and self.box_end:
-                x1, y1 = self.box_start
-                x2, y2 = self.box_end
-                # Ensure proper box format (x1 < x2, y1 < y2)
-                box = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
-                self.box_drawn.emit(box)
-            self.box_start = None
-            self.box_end = None
-            self.update()
-
-    def paintEvent(self, event):
-        """Custom paint event to draw box during drawing"""
-        super().paintEvent(event)
-
-        if (
-            self.annotation_mode == AnnotationMode.BOX_ADD
-            and self.drawing_box
-            and self.box_start
-            and self.box_end
-        ):
-
-            painter = QPainter(self)
-            painter.setPen(QPen(QColor(0, 120, 212), 2, Qt.PenStyle.DashLine))
-
-            # Convert image coordinates back to widget coordinates
-            x1 = int(self.box_start[0] * self.scale_factor + self.image_offset[0])
-            y1 = int(self.box_start[1] * self.scale_factor + self.image_offset[1])
-            x2 = int(self.box_end[0] * self.scale_factor + self.image_offset[0])
-            y2 = int(self.box_end[1] * self.scale_factor + self.image_offset[1])
-
-            painter.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
 
 
 class FrameByFrameWidget(QWidget):
@@ -359,7 +49,6 @@ class FrameByFrameWidget(QWidget):
         self.cutie_tracker = None
 
         # Workers
-        self.cellsam_worker = None
         self.sam_worker = None
         self.cutie_worker = None
 
@@ -383,46 +72,107 @@ class FrameByFrameWidget(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
 
-        # Control panel
+        # Control panel - minimum height
         self.setup_control_panel(layout)
 
-        # Image panel
+        # Image panel - takes remaining height
         self.setup_image_panel(layout)
 
-        # Tool panel
-        self.setup_tool_panel(layout)
-
-        # Progress panel
-        self.setup_progress_panel(layout)
-
     def setup_control_panel(self, parent_layout):
-        """Setup frame navigation controls"""
-        control_group = QGroupBox("Frame Navigation")
-        layout = QHBoxLayout(control_group)
+        """Setup merged frame navigation and segmentation tools panel"""
+        merged_group = QGroupBox("Control Panel")
+        main_layout = QVBoxLayout(merged_group)
+        main_layout.setSpacing(12)
+
+        # Set size policy to prefer minimum height
+        merged_group.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
+
+        # Top row: Frame navigation
+        nav_layout = QHBoxLayout()
 
         # Frame info
         self.frame_info_label = QLabel("No frames loaded")
-        layout.addWidget(self.frame_info_label)
+        nav_layout.addWidget(self.frame_info_label)
 
-        layout.addStretch()
+        nav_layout.addStretch()
 
         # Navigation buttons
         self.prev_button = QPushButton("◀ Previous (A)")
         self.prev_button.clicked.connect(self.previous_frame)
         self.prev_button.setEnabled(False)
-        layout.addWidget(self.prev_button)
+        nav_layout.addWidget(self.prev_button)
 
         self.next_button = QPushButton("Next (D) ▶")
         self.next_button.clicked.connect(self.next_frame)
         self.next_button.setEnabled(False)
-        layout.addWidget(self.next_button)
+        nav_layout.addWidget(self.next_button)
 
-        parent_layout.addWidget(control_group)
+        main_layout.addLayout(nav_layout)
+
+        # Bottom row: Segmentation tools
+        tools_layout = QHBoxLayout()
+
+        # Tool mode label
+        tools_label = QLabel("Tools:")
+        tools_label.setStyleSheet("font-weight: bold;")
+        tools_layout.addWidget(tools_label)
+
+        # Mode selection buttons in a compact layout
+        self.mode_group = QButtonGroup()
+
+        self.view_radio = QRadioButton("View (1)")
+        self.view_radio.setChecked(True)
+        self.view_radio.toggled.connect(
+            lambda: self.set_annotation_mode(AnnotationMode.VIEW)
+        )
+        self.mode_group.addButton(self.view_radio)
+        tools_layout.addWidget(self.view_radio)
+
+        self.click_radio = QRadioButton("Click Add (2)")
+        self.click_radio.toggled.connect(
+            lambda: self.set_annotation_mode(AnnotationMode.CLICK_ADD)
+        )
+        self.mode_group.addButton(self.click_radio)
+        tools_layout.addWidget(self.click_radio)
+
+        self.box_radio = QRadioButton("Box Add (3)")
+        self.box_radio.toggled.connect(
+            lambda: self.set_annotation_mode(AnnotationMode.BOX_ADD)
+        )
+        self.mode_group.addButton(self.box_radio)
+        tools_layout.addWidget(self.box_radio)
+
+        self.remove_radio = QRadioButton("Remove (4)")
+        self.remove_radio.toggled.connect(
+            lambda: self.set_annotation_mode(AnnotationMode.MASK_REMOVE)
+        )
+        self.mode_group.addButton(self.remove_radio)
+        tools_layout.addWidget(self.remove_radio)
+
+        self.edit_id_radio = QRadioButton("Edit ID (5)")
+        self.edit_id_radio.toggled.connect(
+            lambda: self.set_annotation_mode(AnnotationMode.EDIT_CELL_ID)
+        )
+        self.mode_group.addButton(self.edit_id_radio)
+        tools_layout.addWidget(self.edit_id_radio)
+
+        tools_layout.addStretch()
+
+        main_layout.addLayout(tools_layout)
+
+        parent_layout.addWidget(merged_group)
 
     def setup_image_panel(self, parent_layout):
         """Setup dual image display"""
         image_group = QGroupBox("Current Frame vs Previous Frame")
         layout = QHBoxLayout(image_group)
+
+        # Set size policy to expand and take all remaining vertical space
+        image_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         # Create splitter for resizable panels
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -432,10 +182,8 @@ class FrameByFrameWidget(QWidget):
         prev_panel = QWidget()
         prev_layout = QVBoxLayout(prev_panel)
         prev_layout.addWidget(QLabel("Previous Frame:"))
-        self.prev_image_label = InteractiveImageLabel()
+        self.prev_image_label = InteractiveFrameWidget()
         self.prev_image_label.setEnabled(False)  # Non-interactive
-        # Make both image displays expand to fill available space equally
-        from PyQt6.QtWidgets import QSizePolicy
 
         size_policy = QSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -448,7 +196,7 @@ class FrameByFrameWidget(QWidget):
         curr_panel = QWidget()
         curr_layout = QVBoxLayout(curr_panel)
         curr_layout.addWidget(QLabel("Current Frame:"))
-        self.curr_image_label = InteractiveImageLabel()
+        self.curr_image_label = InteractiveFrameWidget()
         self.curr_image_label.point_clicked.connect(self.on_point_clicked)
         self.curr_image_label.box_drawn.connect(self.on_box_drawn)
         self.curr_image_label.mask_clicked.connect(self.on_mask_clicked)
@@ -460,10 +208,15 @@ class FrameByFrameWidget(QWidget):
         curr_layout.addWidget(self.curr_image_label)
         splitter.addWidget(curr_panel)
 
-        # Set equal sizes
-        splitter.setSizes([400, 400])
+        # Set equal proportional sizes (50% each)
+        splitter.setStretchFactor(0, 1)  # Previous panel
+        splitter.setStretchFactor(1, 1)  # Current panel
 
-        parent_layout.addWidget(image_group)
+        # Ensure both panels start with equal sizes
+        splitter.setSizes([1, 1])  # Equal proportions
+
+        # Add with stretch factor to make it expand in the parent layout
+        parent_layout.addWidget(image_group, 1)  # stretch factor of 1
 
     def setup_tool_panel(self, parent_layout):
         """Setup annotation tools"""
@@ -514,15 +267,6 @@ class FrameByFrameWidget(QWidget):
         layout.addLayout(mode_layout)
 
         parent_layout.addWidget(tool_group)
-
-    def setup_progress_panel(self, parent_layout):
-        """Setup progress display"""
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        parent_layout.addWidget(self.progress_bar)
-
-        self.status_label = QLabel("Ready")
-        parent_layout.addWidget(self.status_label)
 
     def setup_shortcuts(self):
         """Setup keyboard shortcuts"""
@@ -680,7 +424,7 @@ class FrameByFrameWidget(QWidget):
             # Get first frame masks
             first_frame_masks = self.frame_masks[0]
 
-            # Show progress (you might want to add a progress dialog here)
+            # Show progress
             self.status_update.emit("Initializing CUTIE tracking...")
 
             # Start CUTIE tracking worker
