@@ -2,15 +2,14 @@
 Annotation functionality mixin for frame-by-frame widget
 """
 
-from typing import TYPE_CHECKING, Tuple
+from typing import Tuple
 
 from PyQt6.QtWidgets import QInputDialog, QMessageBox
 
-from protocols.frame_by_frame_widget_protocol import FrameByFrameWidgetProtocol
 from widgets.interactive_frame_widget import AnnotationMode
 
 
-class AnnotationMixin(FrameByFrameWidgetProtocol):
+class AnnotationMixin:
     """Mixin for annotation functionality
 
     Requires the implementing class to provide StorageProtocol and UIProtocol interfaces.

@@ -9,9 +9,6 @@ from PyQt6.QtWidgets import QMessageBox
 
 from workers.cutie_worker import CutieWorker
 
-if TYPE_CHECKING:
-    from protocols.storage_protocol import StorageProtocol, UIProtocol
-
 
 class CutieMixin:
     """Mixin for CUTIE tracking functionality
@@ -22,13 +19,6 @@ class CutieMixin:
     def __init__(self) -> None:
         # Initialize CUTIE worker lazily
         self._cutie_worker: Optional[CutieWorker] = None
-
-    def _assert_protocols(self) -> None:
-        """Assert that the implementing class provides required protocols"""
-        if TYPE_CHECKING:
-            # Type checker will verify these interfaces exist
-            assert isinstance(self, StorageProtocol)
-            assert isinstance(self, UIProtocol)
 
     @property
     def cutie_worker(self) -> Optional[CutieWorker]:
