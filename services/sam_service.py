@@ -29,6 +29,8 @@ class SamService:
         self.delegate = delegate
         # Initialize SAM worker lazily
         self._sam_worker: Optional[SamWorker] = None
+        # Track which frame index is currently loaded in SAM
+        self._loaded_frame_index: Optional[int] = None
 
     @property
     def sam_worker(self) -> Optional[SamWorker]:
@@ -49,8 +51,35 @@ class SamService:
                 self._sam_worker.cancel()
                 self._sam_worker.cleanup()
                 self._sam_worker = None
+            self._loaded_frame_index = None
         except:
             pass  # Ignore cleanup errors during destruction
+
+    def _ensure_frame_loaded(self) -> bool:
+        """Ensure the current frame is loaded in SAM (one-time per frame)"""
+        if self.sam_worker is None:
+            return False
+
+        current_frame_index = self.delegate.get_current_frame_index()
+
+        # Check if we already have this frame loaded
+        if self._loaded_frame_index == current_frame_index:
+            return True
+
+        # Load the current frame
+        current_image = self.delegate.get_current_frame()
+        if current_image is None:
+            return False
+
+        try:
+            self.sam_worker.set_image(current_image)
+            self._loaded_frame_index = current_frame_index
+            print(f"SAM: Loaded frame {current_frame_index}")
+            return True
+        except Exception as e:
+            print(f"SAM: Failed to load frame {current_frame_index}: {str(e)}")
+            self._loaded_frame_index = None
+            return False
 
     def on_point_clicked(self, point: Tuple[int, int]) -> None:
         """Handle point click for SAM segmentation"""
@@ -65,11 +94,13 @@ class SamService:
         if self.sam_worker.isRunning():
             return  # Worker is busy
 
-        current_image = self.delegate.get_current_frame()
+        # Ensure current frame is loaded in SAM (one-time per frame)
+        if not self._ensure_frame_loaded():
+            self.delegate.show_warning("SAM Error", "Failed to load current frame")
+            return
 
         try:
-            # Set image and predict
-            self.sam_worker.set_image(current_image)
+            # Predict with already loaded image
             mask, score = self.sam_worker.predict_point(point)
 
             # Emit the result directly
@@ -93,11 +124,13 @@ class SamService:
         if self.sam_worker.isRunning():
             return  # Worker is busy
 
-        current_image = self.delegate.get_current_frame()
+        # Ensure current frame is loaded in SAM (one-time per frame)
+        if not self._ensure_frame_loaded():
+            self.delegate.show_warning("SAM Error", "Failed to load current frame")
+            return
 
         try:
-            # Set image and predict
-            self.sam_worker.set_image(current_image)
+            # Predict with already loaded image
             mask, score = self.sam_worker.predict_box(box)
 
             # Emit the result directly
@@ -110,8 +143,6 @@ class SamService:
 
     def on_sam_complete(self, mask: np.ndarray, score: float) -> None:
         """Handle SAM completion"""
-        # Note: No need to set worker to None since it's persistent now
-
         # Add mask to current frame
         current_masks = self.delegate.get_current_frame_masks()
         if current_masks is None:

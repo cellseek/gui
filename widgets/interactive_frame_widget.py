@@ -24,6 +24,7 @@ class InteractiveFrameWidget(QLabel):
     box_drawn = pyqtSignal(tuple)  # (x1, y1, x2, y2)
     mask_clicked = pyqtSignal(tuple)  # (x, y) for mask removal
     cell_id_edit_requested = pyqtSignal(tuple, int)  # (x, y), current_cell_id
+    mouse_hover = pyqtSignal(tuple)  # (x, y) for live preview
 
     def __init__(self):
         super().__init__()
@@ -35,6 +36,8 @@ class InteractiveFrameWidget(QLabel):
         self.annotation_mode = AnnotationMode.VIEW
         self.image = None
         self.masks = None
+        self.preview_mask = None
+        self.preview_score = 0.0
         self.overlay_image = None
         self.scale_factor = 1.0
         self.image_offset = (0, 0)
@@ -43,10 +46,18 @@ class InteractiveFrameWidget(QLabel):
         self.drawing_box = False
         self.box_start = None
         self.box_end = None
+        
+        # Enable mouse tracking for hover events
+        self.setMouseTracking(True)
 
     def set_annotation_mode(self, mode: AnnotationMode):
         """Set the annotation mode"""
         self.annotation_mode = mode
+
+        # Clear preview when not in click mode
+        if mode != AnnotationMode.CLICK_ADD:
+            self.preview_mask = None
+            self.update_display()
 
         if mode == AnnotationMode.VIEW:
             self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -69,6 +80,12 @@ class InteractiveFrameWidget(QLabel):
         self.masks = masks.copy() if masks is not None else None
         self.update_display()
 
+    def set_preview_mask(self, mask: np.ndarray, score: float):
+        """Set preview mask for live preview"""
+        self.preview_mask = mask.copy() if mask is not None else None
+        self.preview_score = score
+        self.update_display()
+
     def update_display(self):
         """Update the display with image and masks"""
         if self.image is None:
@@ -81,6 +98,11 @@ class InteractiveFrameWidget(QLabel):
         # Overlay masks if available
         if self.masks is not None:
             display_image = self._overlay_masks(display_image, self.masks)
+            
+        # Overlay preview mask if available and in click mode
+        if (self.preview_mask is not None and 
+            self.annotation_mode == AnnotationMode.CLICK_ADD):
+            display_image = self._overlay_preview_mask(display_image, self.preview_mask)
 
         # Convert to QPixmap and display
         h, w = display_image.shape[:2]
@@ -222,6 +244,21 @@ class InteractiveFrameWidget(QLabel):
 
         return colors
 
+    def _overlay_preview_mask(self, image: np.ndarray, preview_mask: np.ndarray) -> np.ndarray:
+        """Overlay preview mask with a semi-transparent cyan color"""
+        if preview_mask is None:
+            return image
+            
+        overlay = image.copy()
+        # Use cyan color for preview with high transparency
+        preview_color = np.array([0, 255, 255], dtype=np.uint8)  # Cyan
+        mask = preview_mask > 0
+        if np.any(mask):
+            # More transparent preview (0.8 original + 0.2 preview)
+            overlay[mask] = (0.8 * overlay[mask] + 0.2 * preview_color).astype(np.uint8)
+        
+        return overlay
+
     def _widget_to_image_coords(self, widget_x: int, widget_y: int) -> Tuple[int, int]:
         """Convert widget coordinates to image coordinates"""
         if self.image is None:
@@ -271,6 +308,11 @@ class InteractiveFrameWidget(QLabel):
             pos = event.position().toPoint()
             self.box_end = self._widget_to_image_coords(pos.x(), pos.y())
             self.update()  # Trigger repaint to show box
+        elif self.annotation_mode == AnnotationMode.CLICK_ADD:
+            # Emit hover signal for live preview
+            pos = event.position().toPoint()
+            image_coords = self._widget_to_image_coords(pos.x(), pos.y())
+            self.mouse_hover.emit(image_coords)
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release events"""
