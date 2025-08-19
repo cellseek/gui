@@ -241,8 +241,8 @@ class FrameByFrameWidget(QWidget):
         """Load frames using lazy loading (don't load all images into memory)"""
         self.storage_service.clear_all_data()
 
-        # Use lazy loading for better memory efficiency
-        self.storage_service.set_image_paths_for_lazy_loading(image_paths)
+        # Set image paths for lazy loading
+        self.storage_service.set_image_paths(image_paths)
         self.storage_service.set_current_frame_index(0)
         self.update_display()
         self.status_update.emit(f"Loaded {len(image_paths)} frames (lazy loading)")
@@ -253,8 +253,8 @@ class FrameByFrameWidget(QWidget):
         """Load frames with first frame segmentation for tracking"""
         self.storage_service.clear_all_data()
 
-        # Use lazy loading for better memory efficiency
-        self.storage_service.set_image_paths_for_lazy_loading(image_paths)
+        # Set image paths for lazy loading
+        self.storage_service.set_image_paths(image_paths)
 
         # Store first frame segmentation results
         self.storage_service.set_cellsam_result_for_frame(0, first_frame_result)
@@ -262,7 +262,9 @@ class FrameByFrameWidget(QWidget):
         # Extract first frame masks
         first_frame_masks = first_frame_result["masks"]
         if first_frame_masks is not None and first_frame_masks.size > 0:
-            self.storage_service.set_mask_for_frame(0, first_frame_masks.astype(np.uint16))
+            self.storage_service.set_mask_for_frame(
+                0, first_frame_masks.astype(np.uint16)
+            )
         else:
             QMessageBox.warning(
                 self, "Load Error", "No masks found in first frame segmentation"
@@ -284,8 +286,8 @@ class FrameByFrameWidget(QWidget):
         """Load frames with pre-computed segmentation results"""
         self.storage_service.clear_all_data()
 
-        # Set up lazy loading
-        self.storage_service.set_image_paths_for_lazy_loading(image_paths)
+        # Set image paths for lazy loading
+        self.storage_service.set_image_paths(image_paths)
 
         frame_masks = {}
         cellsam_results = {}
@@ -310,7 +312,9 @@ class FrameByFrameWidget(QWidget):
         self.storage_service.set_cellsam_results(cellsam_results)
         self.storage_service.set_current_frame_index(0)
         self.update_display()
-        self.status_update.emit(f"Loaded {len(image_paths)} frames with segmentation (lazy loading)")
+        self.status_update.emit(
+            f"Loaded {len(image_paths)} frames with segmentation (lazy loading)"
+        )
 
     def update_display(self):
         """Update the image display"""
@@ -371,21 +375,27 @@ class FrameByFrameWidget(QWidget):
                 previous_image = self.storage_service.get_frame(current_index)
                 previous_mask = self.storage_service.get_mask_for_frame(current_index)
                 current_image = self.storage_service.get_frame(next_index)
-                
+
                 # Run CUTIE tracking
-                predicted_mask = self.cutie_service.track_next_frame(
+                predicted_mask = self.cutie_service.track(
                     previous_image, previous_mask, current_image, next_index
                 )
-                
+
                 if predicted_mask is not None:
                     # Store the predicted mask and move to next frame
-                    self.storage_service.set_mask_for_frame(next_index, predicted_mask.astype(np.uint16))
+                    self.storage_service.set_mask_for_frame(
+                        next_index, predicted_mask.astype(np.uint16)
+                    )
                     self.storage_service.set_current_frame_index(next_index)
                     self.update_display()
-                    self.status_update.emit(f"Frame {next_index + 1} tracked successfully")
+                    self.status_update.emit(
+                        f"Frame {next_index + 1} tracked successfully"
+                    )
                 else:
                     # Tracking failed, show error but still allow navigation
-                    self.show_warning("Tracking Error", "CUTIE tracking failed for this frame")
+                    self.show_warning(
+                        "Tracking Error", "CUTIE tracking failed for this frame"
+                    )
                     self.storage_service.set_current_frame_index(next_index)
                     self.update_display()
             else:

@@ -5,7 +5,7 @@ Annotation service for handling annotation functionality
 from typing import Protocol, Tuple
 
 import numpy as np
-from PyQt6.QtWidgets import QInputDialog, QMessageBox
+from PyQt6.QtWidgets import QInputDialog
 
 from widgets.interactive_frame_widget import AnnotationMode
 

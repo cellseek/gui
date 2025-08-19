@@ -28,22 +28,22 @@ class CutieService:
                 return None
         return self._cutie_worker
 
-    def track_next_frame(
-        self, 
-        previous_image: np.ndarray, 
-        previous_mask: np.ndarray, 
-        current_image: np.ndarray, 
-        frame_index: int
+    def track(
+        self,
+        previous_image: np.ndarray,
+        previous_mask: np.ndarray,
+        current_image: np.ndarray,
+        frame_index: int,
     ) -> Optional[np.ndarray]:
         """
         Track the next frame using CUTIE.
-        
+
         Args:
             previous_image: Previous frame image
             previous_mask: Mask from previous frame
             current_image: Current frame image to track
             frame_index: Index of current frame
-            
+
         Returns:
             Predicted mask for current frame, or None if tracking failed
         """
@@ -56,7 +56,7 @@ class CutieService:
                 raise RuntimeError("CUTIE worker is busy")
 
             # Use the step function to get prediction
-            predicted_mask = self._cutie_worker.step(
+            predicted_mask = self._cutie_worker.track(
                 previous_image, previous_mask, current_image, frame_index
             )
 

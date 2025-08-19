@@ -5,7 +5,6 @@ SAM (Segment Anything Model) service for segmentation functionality
 from typing import Optional, Protocol, Tuple
 
 import numpy as np
-from PyQt6.QtWidgets import QMessageBox
 
 from workers.sam_worker import SamWorker
 

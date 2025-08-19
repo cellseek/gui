@@ -19,24 +19,16 @@ class StorageService:
         self._image_paths: List[str] = []  # Store original image paths
 
     # Frame management
-    def set_image_paths_for_lazy_loading(self, paths: List[str]) -> None:
-        """Set image paths for lazy loading (don't load images into memory)"""
+    def set_image_paths(self, paths: List[str]) -> None:
+        """Set image paths for lazy loading"""
         self._image_paths = paths.copy()
-        self._frames = [None] * len(paths)  # Initialize with None placeholders
-        self._use_lazy_loading = True
         self._current_frame_index = 0
 
-    def set_frames(self, frames: List[np.ndarray]) -> None:
-        """Set the list of frames (loads all into memory)"""
-        self._frames = frames.copy()
-        self._use_lazy_loading = False
-        self._current_frame_index = 0
-
-    def _load_frame_from_path(self, index: int) -> Optional[np.ndarray]:
-        """Load a frame from disk if using lazy loading"""
-        if not self._use_lazy_loading or index >= len(self._image_paths):
+    def load_frame(self, index: int) -> Optional[np.ndarray]:
+        """Load a frame from disk by index"""
+        if not (0 <= index < len(self._image_paths)):
             return None
-        
+
         try:
             image = cv2.imread(self._image_paths[index])
             if image is not None:
@@ -45,63 +37,27 @@ class StorageService:
                 return image_rgb
         except Exception as e:
             print(f"Failed to load image {self._image_paths[index]}: {str(e)}")
-        
-        return None
 
-    def get_frames(self) -> List[np.ndarray]:
-        """Get all frames (loads all if using lazy loading)"""
-        if self._use_lazy_loading:
-            # Load all frames if needed
-            frames = []
-            for i in range(len(self._image_paths)):
-                frame = self.get_frame(i)
-                if frame is not None:
-                    frames.append(frame)
-            return frames
-        return self._frames.copy()
+        return None
 
     def get_frame_count(self) -> int:
         """Get total number of frames"""
-        if self._use_lazy_loading:
-            return len(self._image_paths)
-        return len(self._frames)
+        return len(self._image_paths)
 
     def get_frame(self, index: int) -> Optional[np.ndarray]:
-        """Get frame by index (loads from disk if using lazy loading)"""
-        if self._use_lazy_loading:
-            if 0 <= index < len(self._image_paths):
-                # Check if frame is already cached
-                if index < len(self._frames) and self._frames[index] is not None:
-                    return self._frames[index]
-                
-                # Load from disk and cache
-                frame = self._load_frame_from_path(index)
-                if frame is not None and index < len(self._frames):
-                    self._frames[index] = frame
-                return frame
-        else:
-            if 0 <= index < len(self._frames):
-                return self._frames[index]
-        return None
+        """Get frame by index (always loads from disk)"""
+        return self.load_frame(index)
 
-    def add_frame(self, frame: np.ndarray) -> None:
-        """Add a frame to the collection"""
-        if self._use_lazy_loading:
-            # Can't add frames in lazy loading mode
-            raise RuntimeError("Cannot add frames in lazy loading mode")
-        self._frames.append(frame)
+    def add_frame_path(self, path: str) -> None:
+        """Add a frame path to the collection"""
+        self._image_paths.append(path)
 
     def clear_frames(self) -> None:
-        """Clear all frames"""
-        self._frames.clear()
-        self._use_lazy_loading = False
+        """Clear all frame paths"""
+        self._image_paths.clear()
         self._current_frame_index = 0
 
     # Image paths management
-    def set_image_paths(self, paths: List[str]) -> None:
-        """Set image paths"""
-        self._image_paths = paths.copy()
-
     def get_image_paths(self) -> List[str]:
         """Get image paths"""
         return self._image_paths.copy()
@@ -208,5 +164,4 @@ class StorageService:
         self.clear_frames()
         self.clear_all_masks()
         self.clear_cellsam_results()
-        self._image_paths.clear()
         self._current_frame_index = 0

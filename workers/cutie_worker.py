@@ -44,7 +44,7 @@ class CutieWorker(QThread):
         """Cancel the tracking"""
         self._cancelled = True
 
-    def step(
+    def track(
         self,
         previous_image: np.ndarray,
         previous_mask: np.ndarray,
@@ -66,39 +66,15 @@ class CutieWorker(QThread):
         if self._cancelled:
             return None
 
-        # Check if tracker is available
-        if self.tracker is None:
-            raise RuntimeError("CUTIE tracker not initialized")
-
-        # Validate inputs
-        if previous_image is None:
-            raise ValueError("Previous image is required for tracking")
-
-        if previous_mask is None:
-            raise ValueError("Previous mask is required for tracking")
-
-        if current_image is None:
-            raise ValueError("Current image is required for tracking")
-
         self.progress_update.emit(0, f"Tracking frame {frame_index + 1}...")
 
-        self.progress_update.emit(25, "Processing previous frame...")
-
-        # First step: process previous frame with its mask
+        # Use the new track method that handles both steps internally
         try:
-            self.tracker.step(previous_image, previous_mask)
+            predicted_mask = self.tracker.track(
+                previous_image, previous_mask, current_image
+            )
         except Exception as e:
-            raise RuntimeError(f"Failed to process previous frame: {e}")
-
-        self.progress_update.emit(75, "Tracking current frame...")
-
-        # Second step: track current frame (no mask provided, get prediction)
-        try:
-            predicted_mask = self.tracker.step(current_image)
-        except Exception as e:
-            raise RuntimeError(f"Failed to track current frame: {e}")
-
-        self.progress_update.emit(95, "Finalizing results...")
+            raise RuntimeError(f"Failed to track frame: {e}")
 
         self.progress_update.emit(100, "Frame tracking complete!")
 
