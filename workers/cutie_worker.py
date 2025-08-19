@@ -1,8 +1,7 @@
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import torch
-from cutie.cutie_tracker import CutieTracker
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
@@ -11,120 +10,115 @@ class CutieWorker(QThread):
 
     progress_update = pyqtSignal(int, str)  # progress, status
     tracking_complete = pyqtSignal(dict)  # results: {frame_idx: masks}
+    frame_tracked = pyqtSignal(
+        int, np.ndarray
+    )  # frame_idx, masks for single frame tracking
     error_occurred = pyqtSignal(str)  # error message
 
-    def __init__(self, frames: List[np.ndarray], first_frame_masks: np.ndarray):
+    def __init__(self):
+        """
+        Initialize CUTIE worker and model.
+        """
         super().__init__()
-        self.frames = frames
-        self.first_frame_masks = first_frame_masks
+
         self._cancelled = False
+        self.tracker = None
+
+        # Initialize CUTIE tracker
+        try:
+            from cutie.cutie_tracker import CutieTracker
+
+            self.tracker = CutieTracker()
+            print("CUTIE tracker initialized successfully")
+        except ImportError as e:
+            print(f"Failed to import CutieTracker: {e}")
+            raise RuntimeError(f"CUTIE not properly installed: {e}")
+        except Exception as e:
+            import traceback
+
+            print(f"Failed to initialize CutieTracker: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
+            raise RuntimeError(f"Failed to initialize CUTIE tracker: {e}")
 
     def cancel(self):
         """Cancel the tracking"""
         self._cancelled = True
 
-    def run(self):
-        """Run CUTIE tracking on all frames"""
+    def step(
+        self,
+        previous_image: np.ndarray,
+        previous_mask: np.ndarray,
+        current_image: np.ndarray,
+        frame_index: int = 0,
+    ) -> np.ndarray:
+        """
+        Perform a single tracking step with CUTIE.
+
+        Args:
+            previous_image: Previous frame image
+            previous_mask: Previous frame mask
+            current_image: Current frame image
+            frame_index: Current frame index (for progress reporting)
+
+        Returns:
+            Predicted mask for current frame
+        """
+        if self._cancelled:
+            return None
+
+        # Check if tracker is available
+        if self.tracker is None:
+            raise RuntimeError("CUTIE tracker not initialized")
+
+        # Validate inputs
+        if previous_image is None:
+            raise ValueError("Previous image is required for tracking")
+
+        if previous_mask is None:
+            raise ValueError("Previous mask is required for tracking")
+
+        if current_image is None:
+            raise ValueError("Current image is required for tracking")
+
+        self.progress_update.emit(0, f"Tracking frame {frame_index + 1}...")
+
+        self.progress_update.emit(25, "Processing previous frame...")
+
+        # First step: process previous frame with its mask
         try:
-            self.progress_update.emit(0, "Initializing CUTIE tracker...")
-
-            # Check if CutieTracker is available
-            if CutieTracker is None:
-                raise ImportError(
-                    "CutieTracker could not be imported. Check CUTIE installation."
-                )
-
-            # Validate inputs
-            if not self.frames:
-                raise ValueError("No frames provided for tracking")
-
-            if self.first_frame_masks is None:
-                raise ValueError("No first frame masks provided")
-
-            if len(self.frames) < 1:
-                raise ValueError("At least one frame is required")
-
-            # Initialize CUTIE tracker
-            try:
-                tracker = CutieTracker()
-            except Exception as e:
-                import traceback
-
-                print(f"Failed to initialize CutieTracker: {e}")
-                print(f"Traceback: {traceback.format_exc()}")
-                raise RuntimeError(f"Failed to initialize CUTIE tracker: {e}")
-
-            self.progress_update.emit(10, "Setting up first frame...")
-
-            # Convert first frame masks to CUTIE format
-            first_frame = self.frames[0]
-
-            # Validate first frame
-            if first_frame is None or first_frame.size == 0:
-                raise ValueError("First frame is empty or invalid")
-
-            # Initialize tracker with first frame and masks
-            try:
-                tracker.step(first_frame, self.first_frame_masks)
-            except Exception as e:
-                raise RuntimeError(
-                    f"Failed to initialize tracker with first frame: {e}"
-                )
-
-            tracking_results = {0: self.first_frame_masks}
-
-            self.progress_update.emit(20, "Tracking subsequent frames...")
-
-            # Track through all subsequent frames
-            for i in range(1, len(self.frames)):
-                if self._cancelled:
-                    break
-
-                frame = self.frames[i]
-
-                # Validate frame
-                if frame is None or frame.size == 0:
-                    raise ValueError(f"Frame {i} is empty or invalid")
-
-                try:
-                    # Track frame using CUTIE
-                    masks = tracker.step(frame)
-                    tracking_results[i] = masks
-                except Exception as e:
-                    raise RuntimeError(f"Failed to track frame {i+1}: {e}")
-
-                # Update progress
-                progress = 20 + int((i / (len(self.frames) - 1)) * 70)
-                self.progress_update.emit(
-                    progress, f"Tracked frame {i+1}/{len(self.frames)}"
-                )
-
-            self.progress_update.emit(95, "Finalizing tracking results...")
-
-            # Clean up tracker
-            try:
-                del tracker
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception as e:
-                print(f"Warning: Failed to clean up tracker: {e}")
-
-            self.progress_update.emit(100, "Tracking complete!")
-
-            if not self._cancelled:
-                self.tracking_complete.emit(tracking_results)
-
+            self.tracker.step(previous_image, previous_mask)
         except Exception as e:
-            import traceback
+            raise RuntimeError(f"Failed to process previous frame: {e}")
 
-            error_msg = f"CUTIE tracking failed: {type(e).__name__}: {str(e)}"
-            if not str(e):
-                error_msg = (
-                    f"CUTIE tracking failed: {type(e).__name__} (no error message)"
-                )
-            traceback_str = traceback.format_exc()
-            detailed_error = f"{error_msg}\n\nFull traceback:\n{traceback_str}"
-            print(
-                f"CUTIE Error Debug: {detailed_error}"
-            )  # Also print to console for debugging
-            self.error_occurred.emit(detailed_error)
+        self.progress_update.emit(75, "Tracking current frame...")
+
+        # Second step: track current frame (no mask provided, get prediction)
+        try:
+            predicted_mask = self.tracker.step(current_image)
+        except Exception as e:
+            raise RuntimeError(f"Failed to track current frame: {e}")
+
+        self.progress_update.emit(95, "Finalizing results...")
+
+        self.progress_update.emit(100, "Frame tracking complete!")
+
+        if not self._cancelled:
+            self.frame_tracked.emit(frame_index, predicted_mask)
+
+        return predicted_mask
+
+    def run(self):
+        """Run method for QThread compatibility - placeholder for future batch processing"""
+        # This method can be used for batch processing in the future
+        # For now, individual steps should use the step() method directly
+        pass
+
+    def cleanup(self):
+        """Clean up tracker resources"""
+        try:
+            if hasattr(self, "tracker"):
+                del self.tracker
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception as e:
+            print(f"Warning: Failed to clean up tracker: {e}")
