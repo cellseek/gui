@@ -23,13 +23,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from widgets.annotation_mixin import AnnotationMixin
-from widgets.cutie_mixin import CutieMixin
+from mixins.annotation_mixin import AnnotationMixin
+from mixins.cutie_mixin import CutieMixin
+from mixins.sam_mixin import SamMixin
+from mixins.storage_mixin import StorageMixin
 from widgets.interactive_frame_widget import AnnotationMode, InteractiveFrameWidget
-from widgets.sam_mixin import SamMixin
 
 
-class FrameByFrameWidget(QWidget, SamMixin, CutieMixin, AnnotationMixin):
+class FrameByFrameWidget(QWidget, SamMixin, CutieMixin, AnnotationMixin, StorageMixin):
     """Main widget for frame-by-frame segmentation and tracking"""
 
     # Signals
@@ -43,13 +44,7 @@ class FrameByFrameWidget(QWidget, SamMixin, CutieMixin, AnnotationMixin):
         SamMixin.__init__(self)
         CutieMixin.__init__(self)
         AnnotationMixin.__init__(self)
-
-        # State
-        self.frames = []  # List of image arrays
-        self.current_frame_index = 0
-        self.frame_masks = {}  # Dict[frame_index] = masks
-        self.cellsam_results = {}  # Store CellSAM results
-        self.first_frame_segmented = False  # Track if CellSAM has run on first frame
+        StorageMixin.__init__(self)
 
         # Setup UI
         self.setup_ui()
@@ -283,32 +278,32 @@ class FrameByFrameWidget(QWidget, SamMixin, CutieMixin, AnnotationMixin):
 
     def load_frames(self, image_paths: List[str]):
         """Load frames from image paths"""
-        self.frames = []
-        self.frame_masks = {}
-        self.cellsam_results = {}
-        self.first_frame_segmented = False
+        self.clear_all_data()
 
         # Cancel any running workers
         if self._cutie_worker is not None:
             self._cutie_worker.cancel()
             self._cutie_worker = None
 
+        frames = []
         for path in image_paths:
             try:
                 image = cv2.imread(path)
                 if image is not None:
                     # Convert BGR to RGB
                     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                    self.frames.append(image_rgb)
+                    frames.append(image_rgb)
             except Exception as e:
                 QMessageBox.warning(
                     self, "Load Error", f"Failed to load {path}: {str(e)}"
                 )
 
-        if self.frames:
-            self.current_frame_index = 0
+        if frames:
+            self.set_frames(frames)
+            self.set_image_paths(image_paths)
+            self.set_current_frame_index(0)
             self.update_display()
-            self.status_update.emit(f"Loaded {len(self.frames)} frames")
+            self.status_update.emit(f"Loaded {len(frames)} frames")
 
         else:
             QMessageBox.warning(self, "Load Error", "No valid frames loaded")
@@ -317,76 +312,79 @@ class FrameByFrameWidget(QWidget, SamMixin, CutieMixin, AnnotationMixin):
         self, image_paths: List[str], segmentation_results: List[dict]
     ):
         """Load frames with pre-computed segmentation results"""
-        self.frames = []
-        self.frame_masks = {}
-        self.cellsam_results = {}
-        self.first_frame_segmented = True  # Mark as already segmented
+        self.clear_all_data()
+        self.set_first_frame_segmented(True)  # Mark as already segmented
 
         # Cancel any running workers
         if self._cutie_worker is not None:
             self._cutie_worker.cancel()
             self._cutie_worker = None
 
+        frames = []
+        frame_masks = {}
+        cellsam_results = {}
+
         # Load frames from segmentation results (they include the original images)
         for i, result in enumerate(segmentation_results):
             try:
                 # Use the original image from CellSAM results
                 image_rgb = result["original_image"]
-                self.frames.append(image_rgb)
+                frames.append(image_rgb)
 
                 # Store the masks
                 masks = result["masks"]
                 if masks is not None and masks.size > 0:
-                    self.frame_masks[i] = masks.astype(np.uint16)
+                    frame_masks[i] = masks.astype(np.uint16)
 
                 # Store full CellSAM results for reference
-                self.cellsam_results[i] = result
+                cellsam_results[i] = result
 
             except Exception as e:
                 QMessageBox.warning(
                     self, "Load Error", f"Failed to load frame {i+1}: {str(e)}"
                 )
 
-        if self.frames:
-            self.current_frame_index = 0
+        if frames:
+            self.set_frames(frames)
+            self.set_image_paths(image_paths)
+            self.set_frame_masks(frame_masks)
+            self.set_cellsam_results(cellsam_results)
+            self.set_current_frame_index(0)
             self.update_display()
-            self.status_update.emit(
-                f"Loaded {len(self.frames)} frames with segmentation"
-            )
+            self.status_update.emit(f"Loaded {len(frames)} frames with segmentation")
         else:
             QMessageBox.warning(self, "Load Error", "No valid frames loaded")
 
     def update_display(self):
         """Update the image display"""
-        if not self.frames:
+        if self.get_frame_count() == 0:
             return
 
         # Update frame info
-        total_frames = len(self.frames)
-        self.frame_info_label.setText(
-            f"Frame {self.current_frame_index + 1} / {total_frames}"
-        )
+        total_frames = self.get_frame_count()
+        current_index = self.get_current_frame_index()
+        self.frame_info_label.setText(f"Frame {current_index + 1} / {total_frames}")
 
         # Update navigation buttons
-        self.prev_button.setEnabled(self.current_frame_index > 0)
-        self.next_button.setEnabled(self.current_frame_index < total_frames - 1)
+        self.prev_button.setEnabled(self.has_previous_frame())
+        self.next_button.setEnabled(self.has_next_frame())
         # Note: auto_segment_button is hidden and not enabled for manual use
 
         # Update current frame display (right side - editable, no cell IDs for clarity)
-        current_image = self.frames[self.current_frame_index]
+        current_image = self.get_current_frame()
         self.curr_image_label.set_image(current_image)
 
         # Set current frame masks if available
-        current_masks = self.frame_masks.get(self.current_frame_index)
+        current_masks = self.get_current_frame_masks()
         self.curr_image_label.set_masks(current_masks)
 
         # Update previous frame display (left side - shows cell IDs)
-        if self.current_frame_index > 0:
-            prev_image = self.frames[self.current_frame_index - 1]
+        if self.has_previous_frame():
+            prev_image = self.get_frame(current_index - 1)
             self.prev_image_label.set_image(prev_image)
 
             # Set previous frame masks if available
-            prev_masks = self.frame_masks.get(self.current_frame_index - 1)
+            prev_masks = self.get_mask_for_frame(current_index - 1)
             self.prev_image_label.set_masks(prev_masks)
         else:
             # First frame - no previous frame
@@ -395,32 +393,34 @@ class FrameByFrameWidget(QWidget, SamMixin, CutieMixin, AnnotationMixin):
 
     def previous_frame(self):
         """Go to previous frame"""
-        if self.current_frame_index > 0:
-            self.current_frame_index -= 1
+        if self.has_previous_frame():
+            current_index = self.get_current_frame_index()
+            self.set_current_frame_index(current_index - 1)
             self.update_display()
 
     def next_frame(self):
         """Go to next frame and run tracking if needed"""
-        if self.current_frame_index < len(self.frames) - 1:
-            next_index = self.current_frame_index + 1
+        if self.has_next_frame():
+            current_index = self.get_current_frame_index()
+            next_index = current_index + 1
 
             # If this is a new frame that needs tracking, run CUTIE
             if (
-                next_index not in self.frame_masks
+                not self.has_mask_for_frame(next_index)
                 and next_index > 0
-                and self.current_frame_index in self.frame_masks
+                and self.has_mask_for_frame(current_index)
             ):
                 # Use worker for frame-by-frame tracking
                 self._track_next_frame(next_index)
             else:
                 # Just move to next frame (already has mask or is first frame)
-                self.current_frame_index = next_index
+                self.set_current_frame_index(next_index)
                 self.update_display()
 
     def get_current_masks(self) -> Optional[np.ndarray]:
         """Get masks for current frame"""
-        return self.frame_masks.get(self.current_frame_index)
+        return self.get_current_frame_masks()
 
     def get_all_masks(self) -> Dict[int, np.ndarray]:
         """Get all frame masks"""
-        return self.frame_masks.copy()
+        return self.get_frame_masks()

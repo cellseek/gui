@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 
 from widgets.frame_by_frame_widget import FrameByFrameWidget
 from widgets.media_import_widget import MediaImportWidget
-from workers.cellsam_worker import CellSAMWorker
+from workers.cellsam_worker import CellSamWorker
 
 
 class MainWindow(QMainWindow):
@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         """Handle frames ready from media import - run CellSAM processing"""
         try:
             # Start CellSAM processing
-            self.cellsam_worker = CellSAMWorker(frame_paths)
+            self.cellsam_worker = CellSamWorker(frame_paths)
             self.cellsam_worker.progress_update.connect(self.on_cellsam_progress)
             self.cellsam_worker.processing_complete.connect(self.on_cellsam_complete)
             self.cellsam_worker.error_occurred.connect(self.on_cellsam_error)

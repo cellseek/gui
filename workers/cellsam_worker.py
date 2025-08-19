@@ -5,7 +5,7 @@ from cellsam import CellSAM
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
-class CellSAMWorker(QThread):
+class CellSamWorker(QThread):
     """Worker thread for running CellSAM processing on first frame only"""
 
     progress_update = pyqtSignal(int, str)  # progress, status

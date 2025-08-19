@@ -4,7 +4,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from segment_anything import SamPredictor, sam_model_registry
 
 
-class SAMWorker(QThread):
+class SamWorker(QThread):
     """Worker thread for SAM operations"""
 
     sam_complete = pyqtSignal(np.ndarray, float)  # mask, score

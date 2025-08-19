@@ -2,24 +2,36 @@
 Annotation functionality mixin for frame-by-frame widget
 """
 
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 
-import numpy as np
 from PyQt6.QtWidgets import QInputDialog, QMessageBox
 
 from widgets.interactive_frame_widget import AnnotationMode
 
+if TYPE_CHECKING:
+    from protocols.storage_protocol import StorageProtocol, UIProtocol
+
 
 class AnnotationMixin:
-    """Mixin for annotation functionality"""
+    """Mixin for annotation functionality
 
-    def set_annotation_mode(self, mode: AnnotationMode):
+    Requires the implementing class to provide StorageProtocol and UIProtocol interfaces.
+    """
+
+    def _assert_protocols(self) -> None:
+        """Assert that the implementing class provides required protocols"""
+        if TYPE_CHECKING:
+            # Type checker will verify these interfaces exist
+            assert isinstance(self, StorageProtocol)
+            assert isinstance(self, UIProtocol)
+
+    def set_annotation_mode(self, mode: AnnotationMode) -> None:
         """Set the annotation mode"""
         self.curr_image_label.set_annotation_mode(mode)
 
-    def on_mask_clicked(self, point: Tuple[int, int]):
+    def on_mask_clicked(self, point: Tuple[int, int]) -> None:
         """Handle mask removal"""
-        current_masks = self.frame_masks.get(self.current_frame_index)
+        current_masks = self.get_current_frame_masks()
         if current_masks is None:
             return
 
@@ -29,12 +41,15 @@ class AnnotationMixin:
             if mask_id > 0:
                 # Remove this mask
                 current_masks[current_masks == mask_id] = 0
-                self.frame_masks[self.current_frame_index] = current_masks
+                current_index = self.get_current_frame_index()
+                self.set_mask_for_frame(current_index, current_masks)
                 self.curr_image_label.set_masks(current_masks)
 
                 self.status_update.emit(f"Removed mask {mask_id}")
 
-    def on_cell_id_edit_requested(self, point: Tuple[int, int], current_cell_id: int):
+    def on_cell_id_edit_requested(
+        self, point: Tuple[int, int], current_cell_id: int
+    ) -> None:
         """Handle cell ID editing request"""
         x, y = point
 
@@ -55,7 +70,7 @@ class AnnotationMixin:
         )
 
         if ok and new_id != current_cell_id:
-            current_masks = self.frame_masks.get(self.current_frame_index)
+            current_masks = self.get_current_frame_masks()
             if current_masks is not None:
                 # Check if new ID already exists
                 if new_id in current_masks:
@@ -70,7 +85,8 @@ class AnnotationMixin:
 
                 # Update the cell ID
                 current_masks[current_masks == current_cell_id] = new_id
-                self.frame_masks[self.current_frame_index] = current_masks
+                current_index = self.get_current_frame_index()
+                self.set_mask_for_frame(current_index, current_masks)
                 self.curr_image_label.set_masks(current_masks)
 
                 self.status_update.emit(
