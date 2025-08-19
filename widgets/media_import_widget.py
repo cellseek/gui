@@ -4,7 +4,7 @@ Video and image import widget with drag and drop support
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import cv2
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -14,8 +14,6 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -103,6 +101,170 @@ class VideoExtractorWorker(QThread):
             self.error_occurred.emit(f"Frame extraction failed: {str(e)}")
 
 
+class EnhancedDropZoneWidget(QWidget):
+    """Enhanced drop zone with integrated upload button"""
+
+    files_dropped = pyqtSignal(list)  # list of file paths
+    upload_clicked = pyqtSignal()  # upload button clicked
+
+    def __init__(self):
+        super().__init__()
+
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(300)
+
+        # Create a frame for the border
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        from PyQt6.QtWidgets import QFrame
+
+        self.border_frame = QFrame()
+        self.border_frame.setFrameStyle(QFrame.Shape.Box)
+        self.border_frame.setLineWidth(4)
+
+        # Setup UI inside the frame
+        layout = QVBoxLayout(self.border_frame)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Drop zone icon and text
+        self.drop_label = QLabel(
+            "Drop video or image files here\n\nSupported formats: MP4, AVI, MOV, PNG, JPG, TIFF"
+        )
+        self.drop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drop_label.setWordWrap(True)
+
+        # Style the drop zone label
+        font = QFont()
+        self.drop_label.setFont(font)
+
+        layout.addWidget(self.drop_label)
+
+        # Upload button
+        self.upload_button = QPushButton("Browse Files")
+        self.upload_button.clicked.connect(self.upload_clicked.emit)
+        self.upload_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #0078d4;
+                color: white;
+                border: none;
+                padding: 12px 32px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #106ebe;
+            }
+        """
+        )
+        layout.addWidget(self.upload_button)
+
+        main_layout.addWidget(self.border_frame)
+
+        # Set initial style with dotted border
+        self.border_frame.setStyleSheet(
+            """
+            QFrame {
+                border: 4px dashed #008080;
+                border-radius: 12px;
+                background-color: rgba(64, 64, 64, 0.8);
+                margin: 10px;
+            }
+            QLabel {
+                color: #b0b0b0;
+                border: none;
+                font-size: 14px;
+                background-color: transparent;
+            }
+        """
+        )
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Handle drag enter event"""
+        if event.mimeData().hasUrls():
+            # Check if any dropped files are valid
+            valid_files = []
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    file_path = url.toLocalFile()
+                    if self._is_valid_file(file_path):
+                        valid_files.append(file_path)
+
+            if valid_files:
+                event.acceptProposedAction()
+                self.border_frame.setStyleSheet(
+                    """
+                    QFrame {
+                        border: 4px dashed #0078d4;
+                        border-radius: 12px;
+                        background-color: rgba(69, 69, 69, 0.9);
+                        margin: 10px;
+                    }
+                    QLabel {
+                        color: #ffffff;
+                        border: none;
+                        font-size: 14px;
+                        background-color: transparent;
+                    }
+                """
+                )
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """Handle drag leave event"""
+        self.border_frame.setStyleSheet(
+            """
+            QFrame {
+                border: 4px dashed #008080;
+                border-radius: 12px;
+                background-color: rgba(64, 64, 64, 0.8);
+                margin: 10px;
+            }
+            QLabel {
+                color: #b0b0b0;
+                border: none;
+                font-size: 14px;
+                background-color: transparent;
+            }
+        """
+        )
+
+    def dropEvent(self, event: QDropEvent):
+        """Handle drop event"""
+        file_paths = []
+
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                file_path = url.toLocalFile()
+                if self._is_valid_file(file_path):
+                    file_paths.append(file_path)
+
+        if file_paths:
+            self.files_dropped.emit(file_paths)
+            event.acceptProposedAction()
+
+        # Reset style
+        self.dragLeaveEvent(event)
+
+    def _is_valid_file(self, file_path: str) -> bool:
+        """Check if file is valid image or video"""
+        ext = Path(file_path).suffix.lower()
+
+        # Image extensions
+        image_exts = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".gif"}
+        # Video extensions
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
+
+        return ext in image_exts or ext in video_exts
+
+
 class DropZoneWidget(QWidget):
     """Drag and drop zone for files"""
 
@@ -112,7 +274,7 @@ class DropZoneWidget(QWidget):
         super().__init__()
 
         self.setAcceptDrops(True)
-        self.setMinimumHeight(200)
+        self.setMinimumHeight(300)
 
         # Setup UI
         layout = QVBoxLayout(self)
@@ -244,75 +406,17 @@ class MediaImportWidget(QWidget):
     def setup_ui(self):
         """Setup the user interface"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(32, 32, 32, 32)
         layout.setSpacing(8)
 
-        # Title
-        title_label = QLabel("Import Video or Images")
-        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title_label)
-
-        # Instructions
-        instructions = QLabel(
-            "Drag and drop a video file or multiple image files, or use the buttons below to browse."
-        )
-        instructions.setWordWrap(True)
-        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        instructions.setStyleSheet("color: #b0b0b0; margin: 10px;")
-        layout.addWidget(instructions)
-
-        # Drop zone
-        self.drop_zone = DropZoneWidget(
-            "Drop video file (.mp4, .avi, .mov, etc.) or\n"
-            "multiple image files (.png, .jpg, .tiff, etc.)"
-        )
+        # Drop zone with upload button - make it take 80% of the space
+        self.drop_zone = EnhancedDropZoneWidget()
         self.drop_zone.files_dropped.connect(self.handle_dropped_files)
-        layout.addWidget(self.drop_zone)
+        self.drop_zone.upload_clicked.connect(self.handle_upload_button)
+        layout.addWidget(self.drop_zone, 8)
 
-        # Manual selection buttons
-        button_layout = QHBoxLayout()
-
-        self.select_video_button = QPushButton("Select Video File")
-        self.select_video_button.clicked.connect(self.select_video_file)
-        button_layout.addWidget(self.select_video_button)
-
-        self.select_images_button = QPushButton("Select Image Files")
-        self.select_images_button.clicked.connect(self.select_image_files)
-        button_layout.addWidget(self.select_images_button)
-
-        layout.addLayout(button_layout)
-
-        # File list
-        self.setup_file_list(layout)
-
-        # Progress area (initially hidden)
+        # Progress area (initially hidden) - give it minimal space when visible
         self.setup_progress_area(layout)
-
-        # Action buttons
-        self.setup_action_buttons(layout)
-
-    def setup_file_list(self, parent_layout):
-        """Setup file list display"""
-        file_group = QGroupBox("Selected Files")
-        layout = QVBoxLayout(file_group)
-
-        self.file_list = QListWidget()
-        self.file_list.setMaximumHeight(150)
-        layout.addWidget(self.file_list)
-
-        # Clear button
-        clear_layout = QHBoxLayout()
-        clear_layout.addStretch()
-
-        self.clear_button = QPushButton("Clear All")
-        self.clear_button.clicked.connect(self.clear_files)
-        self.clear_button.setEnabled(False)
-        clear_layout.addWidget(self.clear_button)
-
-        layout.addLayout(clear_layout)
-
-        parent_layout.addWidget(file_group)
 
     def setup_progress_area(self, parent_layout):
         """Setup progress display area"""
@@ -338,39 +442,22 @@ class MediaImportWidget(QWidget):
         layout.addLayout(cancel_layout)
 
         self.progress_group.setVisible(False)
-        parent_layout.addWidget(self.progress_group)
+        parent_layout.addWidget(
+            self.progress_group, 2
+        )  # Give progress area 20% when visible
 
-    def setup_action_buttons(self, parent_layout):
-        """Setup action buttons"""
-        action_layout = QHBoxLayout()
-        action_layout.addStretch()
-
-        self.process_button = QPushButton("Process and Continue")
-        self.process_button.clicked.connect(self.process_files)
-        self.process_button.setEnabled(False)
-        self.process_button.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #0078d4;
-                color: white;
-                border: none;
-                padding: 12px 24px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #106ebe;
-            }
-            QPushButton:disabled {
-                background-color: #404040;
-                color: #808080;
-            }
-        """
+    def handle_upload_button(self):
+        """Handle upload button click - show file dialog"""
+        # Show file dialog that accepts both video and image files
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Video or Image Files",
+            "",
+            "Media Files (*.mp4 *.avi *.mov *.mkv *.wmv *.flv *.webm *.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif);;Video Files (*.mp4 *.avi *.mov *.mkv *.wmv *.flv *.webm);;Image Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif);;All Files (*)",
         )
-        action_layout.addWidget(self.process_button)
 
-        parent_layout.addLayout(action_layout)
+        if file_paths:
+            self.process_files(file_paths)
 
     def select_video_file(self):
         """Open file dialog to select video file"""
@@ -382,8 +469,7 @@ class MediaImportWidget(QWidget):
         )
 
         if file_path:
-            self.clear_files()
-            self.add_files([file_path])
+            self.process_files([file_path])
 
     def select_image_files(self):
         """Open file dialog to select multiple image files"""
@@ -395,47 +481,15 @@ class MediaImportWidget(QWidget):
         )
 
         if file_paths:
-            self.clear_files()
-            self.add_files(file_paths)
+            self.process_files(file_paths)
 
     def handle_dropped_files(self, file_paths: List[str]):
         """Handle files dropped on the drop zone"""
         if file_paths:
-            self.clear_files()
-            self.add_files(file_paths)
+            self.process_files(file_paths)
 
-    def add_files(self, file_paths: List[str]):
-        """Add files to the list"""
-        for file_path in file_paths:
-            item = QListWidgetItem(Path(file_path).name)
-            item.setData(Qt.ItemDataRole.UserRole, file_path)
-            item.setToolTip(file_path)
-            self.file_list.addItem(item)
-
-        self.clear_button.setEnabled(self.file_list.count() > 0)
-        self.process_button.setEnabled(self.file_list.count() > 0)
-
-        self.status_update.emit(f"Added {len(file_paths)} file(s)")
-
-    def clear_files(self):
-        """Clear all files from the list"""
-        self.file_list.clear()
-        self.clear_button.setEnabled(False)
-        self.process_button.setEnabled(False)
-        self.status_update.emit("Cleared file list")
-
-    def get_file_paths(self) -> List[str]:
-        """Get all file paths from the list"""
-        file_paths = []
-        for i in range(self.file_list.count()):
-            item = self.file_list.item(i)
-            file_path = item.data(Qt.ItemDataRole.UserRole)
-            file_paths.append(file_path)
-        return file_paths
-
-    def process_files(self):
-        """Process the selected files"""
-        file_paths = self.get_file_paths()
+    def process_files(self, file_paths: List[str]):
+        """Process the selected files directly"""
         if not file_paths:
             return
 
@@ -480,7 +534,6 @@ class MediaImportWidget(QWidget):
 
         # Show progress
         self.progress_group.setVisible(True)
-        self.process_button.setEnabled(False)
 
     def _get_frame_step(self) -> tuple:
         """Get frame extraction step from user"""
@@ -541,7 +594,6 @@ class MediaImportWidget(QWidget):
         """Handle video extraction completion"""
         self.video_extractor_worker = None
         self.progress_group.setVisible(False)
-        self.process_button.setEnabled(True)
 
         if frame_paths:
             self.frames_ready.emit(frame_paths)
@@ -555,7 +607,6 @@ class MediaImportWidget(QWidget):
         """Handle video extraction error"""
         self.video_extractor_worker = None
         self.progress_group.setVisible(False)
-        self.process_button.setEnabled(True)
 
         QMessageBox.critical(self, "Extraction Error", error_message)
         self.status_update.emit("Video extraction failed")
@@ -568,7 +619,6 @@ class MediaImportWidget(QWidget):
             self.video_extractor_worker = None
 
         self.progress_group.setVisible(False)
-        self.process_button.setEnabled(True)
         self.status_update.emit("Processing cancelled")
 
     def cleanup(self):

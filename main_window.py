@@ -2,12 +2,17 @@
 New main window for frame-by-frame cell tracking workflow
 """
 
-from pathlib import Path
+import os
+
+# Import CellSAM
+import sys
+import tempfile
 from typing import List
 
-from PyQt6.QtCore import Qt, QTimer
+import cv2
+import numpy as np
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -20,12 +25,95 @@ from PyQt6.QtWidgets import (
 from widgets.frame_by_frame_widget import FrameByFrameWidget
 from widgets.media_import_widget import MediaImportWidget
 
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "cellsam"))
+from cellsam.model import CellSAM
 
-class NewMainWindow(QMainWindow):
+
+class CellSAMWorker(QThread):
+    """Worker thread for running CellSAM processing on first frame only"""
+
+    progress_update = pyqtSignal(int, str)  # progress, status
+    processing_complete = pyqtSignal(
+        list, dict
+    )  # frame_paths, first_frame_segmentation
+    error_occurred = pyqtSignal(str)  # error message
+
+    def __init__(self, frame_paths: List[str]):
+        super().__init__()
+        self.frame_paths = frame_paths
+        self._cancelled = False
+
+    def cancel(self):
+        """Cancel the processing"""
+        self._cancelled = True
+
+    def run(self):
+        """Run CellSAM processing on first frame only"""
+        try:
+            self.progress_update.emit(0, "Initializing CellSAM model...")
+
+            # Initialize CellSAM model
+            model = CellSAM(gpu=True)
+
+            self.progress_update.emit(30, "Model loaded. Processing first frame...")
+
+            if self._cancelled or not self.frame_paths:
+                return
+
+            # Process only the first frame
+            first_frame_path = self.frame_paths[0]
+
+            # Load and process first frame
+            img = cv2.imread(first_frame_path)
+            if img is None:
+                self.error_occurred.emit(
+                    f"Could not load first frame: {first_frame_path}"
+                )
+                return
+
+            # Convert BGR to RGB
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+            self.progress_update.emit(60, "Running segmentation on first frame...")
+
+            # Run segmentation on first frame
+            masks, flows, styles = model.segment(img, diameter=None)
+
+            # Store first frame results
+            first_frame_result = {
+                "frame_path": first_frame_path,
+                "masks": masks,
+                "flows": flows,
+                "styles": styles,
+                "original_image": img,
+            }
+
+            self.progress_update.emit(90, "Cleaning up model...")
+
+            # Clean up model to free memory
+            del model
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            self.progress_update.emit(100, "First frame processing complete!")
+
+            if not self._cancelled:
+                self.processing_complete.emit(self.frame_paths, first_frame_result)
+
+        except Exception as e:
+            self.error_occurred.emit(f"CellSAM processing failed: {str(e)}")
+
+
+class MainWindow(QMainWindow):
     """New main window for frame-by-frame cell tracking workflow"""
 
     def __init__(self):
         super().__init__()
+
+        # State
+        self.cellsam_worker = None
 
         # Setup UI
         self.setup_ui()
@@ -33,13 +121,13 @@ class NewMainWindow(QMainWindow):
         self.setup_connections()
 
         # Set window properties
-        self.setWindowTitle("CellSeek - Frame-by-Frame Cell Tracking")
+        self.setWindowTitle("CellSeek")
         self.setMinimumSize(800, 600)
 
-        # Set window size to 90% of screen size for better visibility
+        # Set screen size
         screen = self.screen().availableGeometry()
-        window_width = int(screen.width() * 0.9)
-        window_height = int(screen.height() * 0.9)
+        window_width = int(screen.width() * 0.75)
+        window_height = int(screen.height() * 0.75)
         self.resize(window_width, window_height)
 
         # Center window on screen
@@ -110,21 +198,56 @@ class NewMainWindow(QMainWindow):
         self.move(x, y)
 
     def on_frames_ready(self, frame_paths: List[str]):
-        """Handle frames ready from media import"""
+        """Handle frames ready from media import - run CellSAM processing"""
         try:
-            # Load frames into frame-by-frame widget
-            self.frame_by_frame_widget.load_frames(frame_paths)
+            # Start CellSAM processing
+            self.cellsam_worker = CellSAMWorker(frame_paths)
+            self.cellsam_worker.progress_update.connect(self.on_cellsam_progress)
+            self.cellsam_worker.processing_complete.connect(self.on_cellsam_complete)
+            self.cellsam_worker.error_occurred.connect(self.on_cellsam_error)
+
+            self.cellsam_worker.start()
+
+            self.status_label.setText("Initializing CellSAM segmentation...")
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Error", f"Failed to start CellSAM processing: {str(e)}"
+            )
+
+    def on_cellsam_progress(self, progress: int, status: str):
+        """Handle CellSAM processing progress"""
+        self.status_label.setText(f"{status} ({progress}%)")
+
+    def on_cellsam_complete(self, frame_paths: List[str], first_frame_result: dict):
+        """Handle CellSAM processing completion"""
+        try:
+            self.cellsam_worker = None
+
+            # Load frames and first frame segmentation into frame-by-frame widget
+            self.frame_by_frame_widget.load_frames_with_first_segmentation(
+                frame_paths, first_frame_result
+            )
 
             # Switch to frame-by-frame screen
             self.stacked_widget.setCurrentIndex(1)
 
             # Update status
             self.status_label.setText(
-                f"Loaded {len(frame_paths)} frames - Ready for segmentation"
+                f"First frame segmented - Loaded {len(frame_paths)} frames for tracking"
             )
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load frames: {str(e)}")
+            QMessageBox.critical(
+                self, "Error", f"Failed to load processed frames: {str(e)}"
+            )
+
+    def on_cellsam_error(self, error_message: str):
+        """Handle CellSAM processing error"""
+        self.cellsam_worker = None
+
+        QMessageBox.critical(self, "CellSAM Error", error_message)
+        self.status_label.setText("CellSAM processing failed")
 
     def on_status_update(self, message: str):
         """Handle status updates"""

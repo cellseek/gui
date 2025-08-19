@@ -2,6 +2,7 @@
 Frame-by-frame segmentation and tracking widget
 """
 
+import os
 import sys
 from enum import Enum
 from pathlib import Path
@@ -11,17 +12,7 @@ import cv2
 import numpy as np
 import torch
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import (
-    QBrush,
-    QColor,
-    QCursor,
-    QImage,
-    QKeySequence,
-    QPainter,
-    QPen,
-    QPixmap,
-    QShortcut,
-)
+from PyQt6.QtGui import QColor, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -42,12 +33,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-# Add project paths
-current_dir = Path(__file__).parent.parent.parent
-sam_path = current_dir / "sam"
-cutie_path = current_dir / "cutie"
-sys.path.insert(0, str(sam_path.resolve()))
-sys.path.insert(0, str(cutie_path.resolve()))
+# Import CUTIE tracker
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "cutie"))
+from cutie.cutie_tracker import CutieTracker
 
 
 class AnnotationMode(Enum):
@@ -57,6 +45,7 @@ class AnnotationMode(Enum):
     CLICK_ADD = "click_add"
     BOX_ADD = "box_add"
     MASK_REMOVE = "mask_remove"
+    EDIT_CELL_ID = "edit_cell_id"
 
 
 class CellSAMWorker(QThread):
@@ -82,7 +71,7 @@ class CellSAMWorker(QThread):
             self.progress_update.emit("Initializing CellSAM...")
 
             # Import CellSAM
-            from sam import CellSAM
+            from cellsam import CellSAM
 
             # Initialize model
             device = self.parameters.get("device", "auto")
@@ -145,21 +134,51 @@ class SAMWorker(QThread):
         """Run SAM operation in background thread"""
         try:
             # Import SAM
-            from sam import SAM
+            from segment_anything import SamPredictor, sam_model_registry
 
             # Initialize SAM
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            sam = SAM(device=device)
+
+            # Load SAM model (you may need to adjust the model type and checkpoint path)
+            sam = sam_model_registry["vit_h"](
+                checkpoint="checkpoints/sam_vit_h_4b8939.pth"
+            )
+            sam.to(device)
+            predictor = SamPredictor(sam)
 
             if self._cancelled:
                 return
 
+            # Set the image for the predictor
+            predictor.set_image(self.image)
+
             if self.operation == "point":
                 point = self.kwargs["point"]
-                mask, score, _ = sam.segment_point(self.image, [point])
+                input_point = np.array([point])
+                input_label = np.array([1])
+
+                masks, scores, logits = predictor.predict(
+                    point_coords=input_point,
+                    point_labels=input_label,
+                    multimask_output=True,
+                )
+
+                # Use the best mask (highest score)
+                best_idx = np.argmax(scores)
+                mask = masks[best_idx]
+                score = scores[best_idx]
+
             elif self.operation == "box":
                 box = self.kwargs["box"]
-                mask, score, _ = sam.segment_box(self.image, box)
+                input_box = np.array([box])  # [x1, y1, x2, y2]
+
+                masks, scores, logits = predictor.predict(
+                    box=input_box,
+                    multimask_output=False,
+                )
+
+                mask = masks[0]
+                score = scores[0]
             else:
                 raise ValueError(f"Unknown operation: {self.operation}")
 
@@ -170,12 +189,83 @@ class SAMWorker(QThread):
             self.error_occurred.emit(f"SAM operation failed: {str(e)}")
 
 
+class CutieTrackingWorker(QThread):
+    """Worker thread for CUTIE tracking"""
+
+    progress_update = pyqtSignal(int, str)  # progress, status
+    tracking_complete = pyqtSignal(dict)  # results: {frame_idx: masks}
+    error_occurred = pyqtSignal(str)  # error message
+
+    def __init__(self, frames: List[np.ndarray], first_frame_masks: np.ndarray):
+        super().__init__()
+        self.frames = frames
+        self.first_frame_masks = first_frame_masks
+        self._cancelled = False
+
+    def cancel(self):
+        """Cancel the tracking"""
+        self._cancelled = True
+
+    def run(self):
+        """Run CUTIE tracking on all frames"""
+        try:
+            self.progress_update.emit(0, "Initializing CUTIE tracker...")
+
+            # Initialize CUTIE tracker
+            tracker = CutieTracker()
+
+            self.progress_update.emit(10, "Setting up first frame...")
+
+            # Convert first frame masks to CUTIE format
+            first_frame = self.frames[0]
+
+            # Initialize tracker with first frame and masks
+            tracker.step(first_frame, self.first_frame_masks)
+
+            tracking_results = {0: self.first_frame_masks}
+
+            self.progress_update.emit(20, "Tracking subsequent frames...")
+
+            # Track through all subsequent frames
+            for i in range(1, len(self.frames)):
+                if self._cancelled:
+                    break
+
+                frame = self.frames[i]
+
+                # Track frame using CUTIE
+                masks = tracker.step(frame)
+                tracking_results[i] = masks
+
+                # Update progress
+                progress = 20 + int((i / (len(self.frames) - 1)) * 70)
+                self.progress_update.emit(
+                    progress, f"Tracked frame {i+1}/{len(self.frames)}"
+                )
+
+            self.progress_update.emit(95, "Finalizing tracking results...")
+
+            # Clean up tracker
+            del tracker
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            self.progress_update.emit(100, "Tracking complete!")
+
+            if not self._cancelled:
+                self.tracking_complete.emit(tracking_results)
+
+        except Exception as e:
+            self.error_occurred.emit(f"CUTIE tracking failed: {str(e)}")
+
+
 class InteractiveImageLabel(QLabel):
     """Interactive image label for annotation"""
 
     point_clicked = pyqtSignal(tuple)  # (x, y)
     box_drawn = pyqtSignal(tuple)  # (x1, y1, x2, y2)
     mask_clicked = pyqtSignal(tuple)  # (x, y) for mask removal
+    cell_id_edit_requested = pyqtSignal(tuple, int)  # (x, y), current_cell_id
 
     def __init__(self):
         super().__init__()
@@ -191,6 +281,7 @@ class InteractiveImageLabel(QLabel):
         self.overlay_image = None
         self.scale_factor = 1.0
         self.image_offset = (0, 0)
+        self.show_cell_ids = True  # Flag to control cell ID display
 
         # Box drawing
         self.drawing_box = False
@@ -203,10 +294,19 @@ class InteractiveImageLabel(QLabel):
 
         if mode == AnnotationMode.VIEW:
             self.setCursor(Qt.CursorShape.ArrowCursor)
-        elif mode in [AnnotationMode.CLICK_ADD, AnnotationMode.MASK_REMOVE]:
+        elif mode in [
+            AnnotationMode.CLICK_ADD,
+            AnnotationMode.MASK_REMOVE,
+            AnnotationMode.EDIT_CELL_ID,
+        ]:
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif mode == AnnotationMode.BOX_ADD:
             self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def set_show_cell_ids(self, show: bool):
+        """Set whether to display cell IDs on masks"""
+        self.show_cell_ids = show
+        self.update_display()
 
     def set_image(self, image: np.ndarray):
         """Set the base image"""
@@ -266,7 +366,7 @@ class InteractiveImageLabel(QLabel):
         self.setPixmap(scaled_pixmap)
 
     def _overlay_masks(self, image: np.ndarray, masks: np.ndarray) -> np.ndarray:
-        """Overlay masks on image with transparency"""
+        """Overlay masks on image with transparency and optional cell IDs"""
         if masks is None or np.max(masks) == 0:
             return image
 
@@ -281,6 +381,68 @@ class InteractiveImageLabel(QLabel):
             if np.any(mask):
                 color = np.array(colors[obj_id - 1], dtype=np.uint8)
                 overlay[mask] = (0.7 * overlay[mask] + 0.3 * color).astype(np.uint8)
+
+        # Add cell ID text if enabled
+        if self.show_cell_ids:
+            overlay = self._add_cell_id_text(overlay, masks, colors)
+
+        return overlay
+
+    def _add_cell_id_text(
+        self, overlay: np.ndarray, masks: np.ndarray, colors: List[Tuple[int, int, int]]
+    ) -> np.ndarray:
+        """Add cell ID text to the overlay"""
+        import cv2
+
+        num_objects = int(np.max(masks))
+
+        for obj_id in range(1, num_objects + 1):
+            mask = masks == obj_id
+            if np.any(mask):
+                # Find centroid of the mask
+                y_coords, x_coords = np.where(mask)
+                if len(y_coords) > 0:
+                    center_y = int(np.mean(y_coords))
+                    center_x = int(np.mean(x_coords))
+
+                    # Choose text color (white or black based on background)
+                    text_color = (255, 255, 255)  # White text
+
+                    # Add text
+                    cv2.putText(
+                        overlay,
+                        str(obj_id),
+                        (center_x - 10, center_y + 5),  # Slight offset for centering
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,  # Font scale
+                        text_color,
+                        2,  # Thickness
+                        cv2.LINE_AA,
+                    )
+
+                    # Add black outline for better visibility
+                    cv2.putText(
+                        overlay,
+                        str(obj_id),
+                        (center_x - 10, center_y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 0, 0),  # Black outline
+                        4,  # Thicker for outline
+                        cv2.LINE_AA,
+                    )
+
+                    # Add white text on top
+                    cv2.putText(
+                        overlay,
+                        str(obj_id),
+                        (center_x - 10, center_y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        text_color,
+                        2,
+                        cv2.LINE_AA,
+                    )
 
         return overlay
 
@@ -346,6 +508,14 @@ class InteractiveImageLabel(QLabel):
         elif self.annotation_mode == AnnotationMode.MASK_REMOVE:
             self.mask_clicked.emit(image_coords)
 
+        elif self.annotation_mode == AnnotationMode.EDIT_CELL_ID:
+            # Get current cell ID at the clicked location
+            if self.masks is not None:
+                x, y = image_coords
+                if 0 <= y < self.masks.shape[0] and 0 <= x < self.masks.shape[1]:
+                    current_cell_id = int(self.masks[y, x])
+                    self.cell_id_edit_requested.emit(image_coords, current_cell_id)
+
     def mouseMoveEvent(self, event):
         """Handle mouse move events"""
         if self.annotation_mode == AnnotationMode.BOX_ADD and self.drawing_box:
@@ -407,19 +577,33 @@ class FrameByFrameWidget(QWidget):
         self.cellsam_results = {}  # Store CellSAM results
         self.first_frame_segmented = False  # Track if CellSAM has run on first frame
 
+        # CUTIE tracker for real-time tracking
+        self.cutie_tracker = None
+
         # Workers
         self.cellsam_worker = None
         self.sam_worker = None
+        self.cutie_worker = None
 
         # Setup UI
         self.setup_ui()
         self.setup_shortcuts()
 
+    def __del__(self):
+        """Cleanup when widget is destroyed."""
+        try:
+            if self.cutie_tracker is not None:
+                # Proper cleanup of tracker resources
+                self.cutie_tracker.reset()
+                self.cutie_tracker = None
+        except:
+            pass  # Ignore cleanup errors during destruction
+
     def setup_ui(self):
         """Setup the user interface"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
 
         # Control panel
         self.setup_control_panel(layout)
@@ -490,6 +674,9 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label.point_clicked.connect(self.on_point_clicked)
         self.curr_image_label.box_drawn.connect(self.on_box_drawn)
         self.curr_image_label.mask_clicked.connect(self.on_mask_clicked)
+        self.curr_image_label.cell_id_edit_requested.connect(
+            self.on_cell_id_edit_requested
+        )
         curr_layout.addWidget(self.curr_image_label)
         splitter.addWidget(curr_panel)
 
@@ -537,27 +724,14 @@ class FrameByFrameWidget(QWidget):
         self.mode_group.addButton(self.remove_radio)
         mode_layout.addWidget(self.remove_radio)
 
+        self.edit_id_radio = QRadioButton("Edit Cell ID (5)")
+        self.edit_id_radio.toggled.connect(
+            lambda: self.set_annotation_mode(AnnotationMode.EDIT_CELL_ID)
+        )
+        self.mode_group.addButton(self.edit_id_radio)
+        mode_layout.addWidget(self.edit_id_radio)
+
         layout.addLayout(mode_layout)
-
-        # CellSAM parameters
-        param_layout = QHBoxLayout()
-
-        param_layout.addWidget(QLabel("Diameter:"))
-        self.diameter_spin = QDoubleSpinBox()
-        self.diameter_spin.setRange(10, 100)
-        self.diameter_spin.setValue(30)
-        self.diameter_spin.setSuffix(" px")
-        param_layout.addWidget(self.diameter_spin)
-
-        param_layout.addWidget(QLabel("Flow Threshold:"))
-        self.flow_threshold_spin = QDoubleSpinBox()
-        self.flow_threshold_spin.setRange(0.1, 1.0)
-        self.flow_threshold_spin.setValue(0.4)
-        self.flow_threshold_spin.setSingleStep(0.1)
-        param_layout.addWidget(self.flow_threshold_spin)
-
-        param_layout.addStretch()
-        layout.addLayout(param_layout)
 
         parent_layout.addWidget(tool_group)
 
@@ -581,6 +755,7 @@ class FrameByFrameWidget(QWidget):
         QShortcut(QKeySequence("2"), self, lambda: self.click_radio.setChecked(True))
         QShortcut(QKeySequence("3"), self, lambda: self.box_radio.setChecked(True))
         QShortcut(QKeySequence("4"), self, lambda: self.remove_radio.setChecked(True))
+        QShortcut(QKeySequence("5"), self, lambda: self.edit_id_radio.setChecked(True))
 
         # Note: Removed 'S' shortcut for CellSAM as it now only runs automatically on first frame
 
@@ -590,6 +765,11 @@ class FrameByFrameWidget(QWidget):
         self.frame_masks = {}
         self.cellsam_results = {}
         self.first_frame_segmented = False
+
+        # Reset tracker
+        if self.cutie_tracker is not None:
+            self.cutie_tracker.reset()
+            self.cutie_tracker = None
 
         for path in image_paths:
             try:
@@ -612,6 +792,167 @@ class FrameByFrameWidget(QWidget):
             self.auto_run_cellsam_on_first_frame()
         else:
             QMessageBox.warning(self, "Load Error", "No valid frames loaded")
+
+    def load_frames_with_segmentation(
+        self, image_paths: List[str], segmentation_results: List[dict]
+    ):
+        """Load frames with pre-computed segmentation results"""
+        self.frames = []
+        self.frame_masks = {}
+        self.cellsam_results = {}
+        self.first_frame_segmented = True  # Mark as already segmented
+
+        # Reset tracker
+        if self.cutie_tracker is not None:
+            self.cutie_tracker.reset()
+            self.cutie_tracker = None
+
+        # Load frames from segmentation results (they include the original images)
+        for i, result in enumerate(segmentation_results):
+            try:
+                # Use the original image from CellSAM results
+                image_rgb = result["original_image"]
+                self.frames.append(image_rgb)
+
+                # Store the masks
+                masks = result["masks"]
+                if masks is not None and masks.size > 0:
+                    self.frame_masks[i] = masks.astype(np.uint16)
+
+                # Store full CellSAM results for reference
+                self.cellsam_results[i] = result
+
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "Load Error", f"Failed to load frame {i+1}: {str(e)}"
+                )
+
+        if self.frames:
+            self.current_frame_index = 0
+            self.update_display()
+            self.status_update.emit(
+                f"Loaded {len(self.frames)} frames with segmentation"
+            )
+        else:
+            QMessageBox.warning(self, "Load Error", "No valid frames loaded")
+
+    def load_frames_with_first_segmentation(
+        self, image_paths: List[str], first_frame_result: dict
+    ):
+        """Load frames with first frame segmentation, then run CUTIE tracking"""
+        self.frames = []
+        self.frame_masks = {}
+        self.cellsam_results = {}
+        self.first_frame_segmented = True
+        self.cutie_worker = None
+
+        # Reset tracker
+        if self.cutie_tracker is not None:
+            self.cutie_tracker.reset()
+            self.cutie_tracker = None
+
+        # Load all frames from paths
+        for path in image_paths:
+            try:
+                image = cv2.imread(path)
+                if image is not None:
+                    # Convert BGR to RGB
+                    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    self.frames.append(image_rgb)
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "Load Error", f"Failed to load {path}: {str(e)}"
+                )
+
+        if not self.frames:
+            QMessageBox.warning(self, "Load Error", "No valid frames loaded")
+            return
+
+        # Store first frame segmentation results
+        self.cellsam_results[0] = first_frame_result
+
+        # Extract first frame masks
+        first_frame_masks = first_frame_result["masks"]
+        if first_frame_masks is not None and first_frame_masks.size > 0:
+            self.frame_masks[0] = first_frame_masks.astype(np.uint16)
+        else:
+            QMessageBox.warning(
+                self, "Load Error", "No masks found in first frame segmentation"
+            )
+            return
+
+        self.current_frame_index = 0
+        self.update_display()
+
+        # Show status
+        cell_count = np.max(first_frame_masks) if first_frame_masks.size > 0 else 0
+        self.status_update.emit(
+            f"Loaded {len(self.frames)} frames. Found {cell_count} cells in first frame. Starting tracking..."
+        )
+
+        # Start CUTIE tracking for remaining frames
+        if len(self.frames) > 1:
+            self.start_cutie_tracking()
+        else:
+            self.status_update.emit("Single frame loaded with segmentation")
+
+    def start_cutie_tracking(self):
+        """Start CUTIE tracking using first frame masks"""
+        try:
+            # Get first frame masks
+            first_frame_masks = self.frame_masks[0]
+
+            # Show progress (you might want to add a progress dialog here)
+            self.status_update.emit("Initializing CUTIE tracking...")
+
+            # Start CUTIE tracking worker
+            self.cutie_worker = CutieTrackingWorker(self.frames, first_frame_masks)
+            self.cutie_worker.progress_update.connect(self.on_cutie_progress)
+            self.cutie_worker.tracking_complete.connect(self.on_cutie_complete)
+            self.cutie_worker.error_occurred.connect(self.on_cutie_error)
+
+            self.cutie_worker.start()
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Tracking Error", f"Failed to start CUTIE tracking: {str(e)}"
+            )
+
+    def on_cutie_progress(self, progress: int, status: str):
+        """Handle CUTIE tracking progress"""
+        self.status_update.emit(f"{status} ({progress}%)")
+
+    def on_cutie_complete(self, tracking_results: dict):
+        """Handle CUTIE tracking completion"""
+        try:
+            self.cutie_worker = None
+
+            # Store tracking results
+            for frame_idx, masks in tracking_results.items():
+                if masks is not None and masks.size > 0:
+                    self.frame_masks[frame_idx] = masks.astype(np.uint16)
+
+            # Update display
+            self.update_display()
+
+            # Show completion status
+            total_cells = (
+                np.max(list(tracking_results.values())[0]) if tracking_results else 0
+            )
+            self.status_update.emit(
+                f"Tracking complete! {total_cells} cells tracked across {len(self.frames)} frames"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Tracking Error", f"Failed to process tracking results: {str(e)}"
+            )
+
+    def on_cutie_error(self, error_message: str):
+        """Handle CUTIE tracking error"""
+        self.cutie_worker = None
+        QMessageBox.critical(self, "CUTIE Error", error_message)
+        self.status_update.emit("Cell tracking failed")
 
     def auto_run_cellsam_on_first_frame(self):
         """Automatically run CellSAM on the first frame"""
@@ -638,18 +979,22 @@ class FrameByFrameWidget(QWidget):
         self.next_button.setEnabled(self.current_frame_index < total_frames - 1)
         # Note: auto_segment_button is hidden and not enabled for manual use
 
-        # Update current frame display
+        # Update current frame display (right side - editable, no cell IDs for clarity)
         current_image = self.frames[self.current_frame_index]
         self.curr_image_label.set_image(current_image)
+        self.curr_image_label.set_show_cell_ids(False)  # No cell IDs on editable frame
 
         # Set current frame masks if available
         current_masks = self.frame_masks.get(self.current_frame_index)
         self.curr_image_label.set_masks(current_masks)
 
-        # Update previous frame display
+        # Update previous frame display (left side - shows cell IDs)
         if self.current_frame_index > 0:
             prev_image = self.frames[self.current_frame_index - 1]
             self.prev_image_label.set_image(prev_image)
+            self.prev_image_label.set_show_cell_ids(
+                True
+            )  # Show cell IDs on previous frame
 
             # Set previous frame masks if available
             prev_masks = self.frame_masks.get(self.current_frame_index - 1)
@@ -670,9 +1015,50 @@ class FrameByFrameWidget(QWidget):
             self.update_display()
 
     def next_frame(self):
-        """Go to next frame"""
+        """Go to next frame and run tracking if needed"""
         if self.current_frame_index < len(self.frames) - 1:
-            self.current_frame_index += 1
+            next_index = self.current_frame_index + 1
+
+            # If we have a tracker and this is a new frame, run tracking
+            if (
+                self.cutie_tracker is not None
+                and next_index not in self.frame_masks
+                and next_index > 0
+            ):
+
+                try:
+                    # Get the next frame
+                    next_frame = self.frames[next_index]
+
+                    # Use current frame mask as reference if available
+                    current_mask = self.frame_masks.get(self.current_frame_index)
+
+                    # Run tracking step
+                    self.status_update.emit(f"Tracking frame {next_index + 1}...")
+
+                    if current_mask is not None:
+                        # Step with reference mask from current frame
+                        predicted_mask = self.cutie_tracker.step(
+                            next_frame, current_mask
+                        )
+                    else:
+                        # Step without mask (shouldn't happen normally)
+                        predicted_mask = self.cutie_tracker.step(next_frame)
+
+                    # Store the prediction
+                    self.frame_masks[next_index] = predicted_mask
+
+                    self.status_update.emit(f"Tracked frame {next_index + 1}")
+
+                except Exception as e:
+                    QMessageBox.warning(
+                        self,
+                        "Tracking Error",
+                        f"Failed to track frame {next_index + 1}: {str(e)}",
+                    )
+
+            # Move to next frame
+            self.current_frame_index = next_index
             self.update_display()
 
     def run_cellsam(self):
@@ -692,10 +1078,10 @@ class FrameByFrameWidget(QWidget):
 
         current_image = self.frames[self.current_frame_index]
 
-        # Get parameters
+        # Get parameters - using default values
         parameters = {
-            "diameter": self.diameter_spin.value(),
-            "flow_threshold": self.flow_threshold_spin.value(),
+            "diameter": 30.0,  # Default value
+            "flow_threshold": 0.4,  # Default value
             "cellprob_threshold": 0.0,
             "device": "auto",
         }
@@ -725,6 +1111,22 @@ class FrameByFrameWidget(QWidget):
         # Store results
         self.cellsam_results[self.current_frame_index] = results
         self.frame_masks[self.current_frame_index] = results["masks"]
+
+        # Initialize CUTIE tracker with first frame
+        if self.current_frame_index == 0 and self.cutie_tracker is None:
+            try:
+                self.cutie_tracker = CutieTracker()
+                # Initialize tracker with first frame and masks
+                first_frame = self.frames[0]
+                first_mask = results["masks"]
+                self.cutie_tracker.step(first_frame, first_mask)
+                self.status_update.emit("CUTIE tracker initialized with first frame")
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Tracker Error",
+                    f"Failed to initialize CUTIE tracker: {str(e)}",
+                )
 
         # Update display
         self.curr_image_label.set_masks(results["masks"])
@@ -820,6 +1222,51 @@ class FrameByFrameWidget(QWidget):
         self.sam_worker = None
         self.status_label.setText("SAM operation failed")
         QMessageBox.warning(self, "SAM Error", error_message)
+
+    def on_cell_id_edit_requested(self, point: Tuple[int, int], current_cell_id: int):
+        """Handle cell ID editing request"""
+        from PyQt6.QtWidgets import QInputDialog
+
+        x, y = point
+
+        if current_cell_id == 0:
+            QMessageBox.information(
+                self, "Edit Cell ID", "No cell at this location to edit."
+            )
+            return
+
+        # Get new cell ID from user
+        new_id, ok = QInputDialog.getInt(
+            self,
+            "Edit Cell ID",
+            f"Enter new ID for cell {current_cell_id}:",
+            value=current_cell_id,
+            min=1,
+            max=9999,
+        )
+
+        if ok and new_id != current_cell_id:
+            current_masks = self.frame_masks.get(self.current_frame_index)
+            if current_masks is not None:
+                # Check if new ID already exists
+                if new_id in current_masks:
+                    reply = QMessageBox.question(
+                        self,
+                        "ID Conflict",
+                        f"Cell ID {new_id} already exists. Do you want to merge the cells?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    )
+                    if reply == QMessageBox.StandardButton.No:
+                        return
+
+                # Update the cell ID
+                current_masks[current_masks == current_cell_id] = new_id
+                self.frame_masks[self.current_frame_index] = current_masks
+                self.curr_image_label.set_masks(current_masks)
+
+                self.status_label.setText(
+                    f"Changed cell ID from {current_cell_id} to {new_id}"
+                )
 
     def get_current_masks(self) -> Optional[np.ndarray]:
         """Get masks for current frame"""

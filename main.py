@@ -11,16 +11,12 @@ from pathlib import Path
 # Add project paths to sys.path
 current_dir = Path(__file__).parent
 project_root = current_dir.parent
-sam_path = project_root / "sam"
-cutie_path = project_root / "cutie"
 
-sys.path.insert(0, str(sam_path.resolve()))
-sys.path.insert(0, str(cutie_path.resolve()))
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
-from new_main_window import NewMainWindow
+from main_window import MainWindow
 
 __version__ = "2.0.0"
 __author__ = "CellSeek Team"
@@ -46,7 +42,7 @@ class CellSeekApp(QApplication):
         self.setStyleSheet(self._get_dark_theme())
 
         # Create main window
-        self.main_window = NewMainWindow()
+        self.main_window = MainWindow()
         self.main_window.show()
 
     def _get_dark_theme(self):
