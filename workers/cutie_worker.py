@@ -107,12 +107,6 @@ class CutieWorker(QThread):
 
         return predicted_mask
 
-    def run(self):
-        """Run method for QThread compatibility - placeholder for future batch processing"""
-        # This method can be used for batch processing in the future
-        # For now, individual steps should use the step() method directly
-        pass
-
     def cleanup(self):
         """Clean up tracker resources"""
         try:

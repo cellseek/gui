@@ -54,7 +54,6 @@ class FrameByFrameWidget(QWidget):
         """Cleanup when widget is destroyed."""
         try:
             # Cancel and cleanup workers via services
-            self.cutie_service.cleanup_cutie_worker()
             self.sam_service.cleanup_sam_worker()
         except:
             pass  # Ignore cleanup errors during destruction
@@ -239,66 +238,23 @@ class FrameByFrameWidget(QWidget):
         # Note: Removed 'S' shortcut for CellSAM as it now only runs automatically on first frame
 
     def load_frames(self, image_paths: List[str]):
-        """Load frames from image paths"""
+        """Load frames using lazy loading (don't load all images into memory)"""
         self.storage_service.clear_all_data()
 
-        # Cancel any running workers
-        self.cutie_service.cleanup_cutie_worker()
-
-        frames = []
-        for path in image_paths:
-            try:
-                image = cv2.imread(path)
-                if image is not None:
-                    # Convert BGR to RGB
-                    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                    frames.append(image_rgb)
-            except Exception as e:
-                QMessageBox.warning(
-                    self, "Load Error", f"Failed to load {path}: {str(e)}"
-                )
-
-        if frames:
-            self.storage_service.set_frames(frames)
-            self.storage_service.set_image_paths(image_paths)
-            self.storage_service.set_current_frame_index(0)
-            self.update_display()
-            self.status_update.emit(f"Loaded {len(frames)} frames")
-
-        else:
-            QMessageBox.warning(self, "Load Error", "No valid frames loaded")
+        # Use lazy loading for better memory efficiency
+        self.storage_service.set_image_paths_for_lazy_loading(image_paths)
+        self.storage_service.set_current_frame_index(0)
+        self.update_display()
+        self.status_update.emit(f"Loaded {len(image_paths)} frames (lazy loading)")
 
     def load_frames_with_first_segmentation(
         self, image_paths: List[str], first_frame_result: dict
     ):
         """Load frames with first frame segmentation for tracking"""
         self.storage_service.clear_all_data()
-        self.storage_service.set_first_frame_segmented(True)
 
-        # Cancel any running workers
-        self.cutie_service.cleanup_cutie_worker()
-
-        # Load all frames from paths
-        frames = []
-        for path in image_paths:
-            try:
-                image = cv2.imread(path)
-                if image is not None:
-                    # Convert BGR to RGB
-                    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                    frames.append(image_rgb)
-            except Exception as e:
-                QMessageBox.warning(
-                    self, "Load Error", f"Failed to load {path}: {str(e)}"
-                )
-
-        if not frames:
-            QMessageBox.warning(self, "Load Error", "No valid frames loaded")
-            return
-
-        # Set the frames and image paths
-        self.storage_service.set_frames(frames)
-        self.storage_service.set_image_paths(image_paths)
+        # Use lazy loading for better memory efficiency
+        self.storage_service.set_image_paths_for_lazy_loading(image_paths)
 
         # Store first frame segmentation results
         self.storage_service.set_cellsam_result_for_frame(0, first_frame_result)
@@ -319,7 +275,7 @@ class FrameByFrameWidget(QWidget):
         # Show status
         cell_count = np.max(first_frame_masks) if first_frame_masks.size > 0 else 0
         self.status_update.emit(
-            f"Loaded {len(frames)} frames. Found {cell_count} cells in first frame. Ready for tracking."
+            f"Loaded {len(image_paths)} frames. Found {cell_count} cells in first frame. Ready for tracking."
         )
 
     def load_frames_with_segmentation(
@@ -327,24 +283,16 @@ class FrameByFrameWidget(QWidget):
     ):
         """Load frames with pre-computed segmentation results"""
         self.storage_service.clear_all_data()
-        self.storage_service.set_first_frame_segmented(
-            True
-        )  # Mark as already segmented
 
-        # Cancel any running workers
-        self.cutie_service.cleanup_cutie_worker()
+        # Set up lazy loading
+        self.storage_service.set_image_paths_for_lazy_loading(image_paths)
 
-        frames = []
         frame_masks = {}
         cellsam_results = {}
 
-        # Load frames from segmentation results (they include the original images)
+        # Store the segmentation data (don't load actual images yet)
         for i, result in enumerate(segmentation_results):
             try:
-                # Use the original image from CellSAM results
-                image_rgb = result["original_image"]
-                frames.append(image_rgb)
-
                 # Store the masks
                 masks = result["masks"]
                 if masks is not None and masks.size > 0:
@@ -358,16 +306,11 @@ class FrameByFrameWidget(QWidget):
                     self, "Load Error", f"Failed to load frame {i+1}: {str(e)}"
                 )
 
-        if frames:
-            self.storage_service.set_frames(frames)
-            self.storage_service.set_image_paths(image_paths)
-            self.storage_service.set_frame_masks(frame_masks)
-            self.storage_service.set_cellsam_results(cellsam_results)
-            self.storage_service.set_current_frame_index(0)
-            self.update_display()
-            self.status_update.emit(f"Loaded {len(frames)} frames with segmentation")
-        else:
-            QMessageBox.warning(self, "Load Error", "No valid frames loaded")
+        self.storage_service.set_frame_masks(frame_masks)
+        self.storage_service.set_cellsam_results(cellsam_results)
+        self.storage_service.set_current_frame_index(0)
+        self.update_display()
+        self.status_update.emit(f"Loaded {len(image_paths)} frames with segmentation (lazy loading)")
 
     def update_display(self):
         """Update the image display"""

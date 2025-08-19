@@ -4,6 +4,7 @@ Storage service for handling frame data and masks
 
 from typing import Dict, List, Optional
 
+import cv2
 import numpy as np
 
 
@@ -12,42 +13,88 @@ class StorageService:
 
     def __init__(self) -> None:
         """Initialize storage"""
-        self._frames: List[np.ndarray] = []  # List of image arrays
         self._frame_masks: Dict[int, np.ndarray] = {}  # Dict[frame_index] = masks
         self._cellsam_results: Dict[int, dict] = {}  # Store CellSAM results
         self._current_frame_index: int = 0
-        self._first_frame_segmented: bool = (
-            False  # Track if CellSAM has run on first frame
-        )
         self._image_paths: List[str] = []  # Store original image paths
 
     # Frame management
-    def set_frames(self, frames: List[np.ndarray]) -> None:
-        """Set the list of frames"""
-        self._frames = frames.copy()
+    def set_image_paths_for_lazy_loading(self, paths: List[str]) -> None:
+        """Set image paths for lazy loading (don't load images into memory)"""
+        self._image_paths = paths.copy()
+        self._frames = [None] * len(paths)  # Initialize with None placeholders
+        self._use_lazy_loading = True
         self._current_frame_index = 0
 
+    def set_frames(self, frames: List[np.ndarray]) -> None:
+        """Set the list of frames (loads all into memory)"""
+        self._frames = frames.copy()
+        self._use_lazy_loading = False
+        self._current_frame_index = 0
+
+    def _load_frame_from_path(self, index: int) -> Optional[np.ndarray]:
+        """Load a frame from disk if using lazy loading"""
+        if not self._use_lazy_loading or index >= len(self._image_paths):
+            return None
+        
+        try:
+            image = cv2.imread(self._image_paths[index])
+            if image is not None:
+                # Convert BGR to RGB
+                image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                return image_rgb
+        except Exception as e:
+            print(f"Failed to load image {self._image_paths[index]}: {str(e)}")
+        
+        return None
+
     def get_frames(self) -> List[np.ndarray]:
-        """Get all frames"""
+        """Get all frames (loads all if using lazy loading)"""
+        if self._use_lazy_loading:
+            # Load all frames if needed
+            frames = []
+            for i in range(len(self._image_paths)):
+                frame = self.get_frame(i)
+                if frame is not None:
+                    frames.append(frame)
+            return frames
         return self._frames.copy()
 
     def get_frame_count(self) -> int:
         """Get total number of frames"""
+        if self._use_lazy_loading:
+            return len(self._image_paths)
         return len(self._frames)
 
     def get_frame(self, index: int) -> Optional[np.ndarray]:
-        """Get frame by index"""
-        if 0 <= index < len(self._frames):
-            return self._frames[index]
+        """Get frame by index (loads from disk if using lazy loading)"""
+        if self._use_lazy_loading:
+            if 0 <= index < len(self._image_paths):
+                # Check if frame is already cached
+                if index < len(self._frames) and self._frames[index] is not None:
+                    return self._frames[index]
+                
+                # Load from disk and cache
+                frame = self._load_frame_from_path(index)
+                if frame is not None and index < len(self._frames):
+                    self._frames[index] = frame
+                return frame
+        else:
+            if 0 <= index < len(self._frames):
+                return self._frames[index]
         return None
 
     def add_frame(self, frame: np.ndarray) -> None:
         """Add a frame to the collection"""
+        if self._use_lazy_loading:
+            # Can't add frames in lazy loading mode
+            raise RuntimeError("Cannot add frames in lazy loading mode")
         self._frames.append(frame)
 
     def clear_frames(self) -> None:
         """Clear all frames"""
         self._frames.clear()
+        self._use_lazy_loading = False
         self._current_frame_index = 0
 
     # Image paths management
@@ -62,7 +109,8 @@ class StorageService:
     # Current frame index management
     def set_current_frame_index(self, index: int) -> None:
         """Set current frame index"""
-        if 0 <= index < len(self._frames):
+        max_index = self.get_frame_count() - 1
+        if 0 <= index <= max_index:
             self._current_frame_index = index
 
     def get_current_frame_index(self) -> int:
@@ -79,7 +127,7 @@ class StorageService:
 
     def has_next_frame(self) -> bool:
         """Check if there's a next frame"""
-        return self._current_frame_index < len(self._frames) - 1
+        return self._current_frame_index < self.get_frame_count() - 1
 
     # Mask management
     def set_frame_masks(self, frame_masks: Dict[int, np.ndarray]) -> None:
@@ -136,15 +184,6 @@ class StorageService:
         """Clear all CellSAM results"""
         self._cellsam_results.clear()
 
-    # First frame segmentation tracking
-    def set_first_frame_segmented(self, segmented: bool) -> None:
-        """Set whether first frame has been segmented"""
-        self._first_frame_segmented = segmented
-
-    def is_first_frame_segmented(self) -> bool:
-        """Check if first frame has been segmented"""
-        return self._first_frame_segmented
-
     # Utility methods
     def get_biggest_cell_id(self) -> int:
         """Get the biggest cell ID across all frames"""
@@ -171,4 +210,3 @@ class StorageService:
         self.clear_cellsam_results()
         self._image_paths.clear()
         self._current_frame_index = 0
-        self._first_frame_segmented = False

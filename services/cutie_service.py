@@ -28,16 +28,6 @@ class CutieService:
                 return None
         return self._cutie_worker
 
-    def cleanup_cutie_worker(self) -> None:
-        """Cleanup CUTIE worker"""
-        try:
-            if self._cutie_worker is not None:
-                self._cutie_worker.cancel()
-                self._cutie_worker.cleanup()
-                self._cutie_worker = None
-        except:
-            pass  # Ignore cleanup errors during destruction
-
     def track_next_frame(
         self, 
         previous_image: np.ndarray, 
