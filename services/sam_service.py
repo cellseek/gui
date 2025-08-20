@@ -40,29 +40,12 @@ class SamService:
             try:
                 self.delegate.emit_status_update("Loading SAM model...")
                 self._sam_worker = SamWorker()
-                # Connect status updates
-                self._sam_worker.status_update.connect(
-                    lambda msg: self.delegate.emit_status_update(msg)
-                )
-                # Emit initialization complete status
-                self._sam_worker.emit_initialization_complete()
-                print("SAM worker initialized successfully")
+                self.delegate.emit_status_update("SAM worker loaded")
             except Exception as e:
                 print(f"Failed to initialize SAM worker: {str(e)}")
                 self.delegate.emit_status_update(f"SAM initialization failed: {str(e)}")
                 return None
         return self._sam_worker
-
-    def cleanup_sam_worker(self) -> None:
-        """Cleanup SAM worker"""
-        try:
-            if self._sam_worker is not None:
-                self._sam_worker.cancel()
-                self._sam_worker.cleanup()
-                self._sam_worker = None
-            self._loaded_frame_index = None
-        except:
-            pass  # Ignore cleanup errors during destruction
 
     def _ensure_frame_loaded(self) -> bool:
         """Ensure the current frame is loaded in SAM (one-time per frame)"""

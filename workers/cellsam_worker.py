@@ -1,62 +1,31 @@
-from typing import List
-
 import cv2
 from cellsam import CellSAM
-from PyQt6.QtCore import QThread, pyqtSignal
 
 
-class CellSamWorker(QThread):
+class CellSamWorker:
     """Worker thread for running CellSAM processing on first frame only"""
 
-    status_update = pyqtSignal(str)  # status message
-    processing_complete = pyqtSignal(
-        list, dict
-    )  # frame_paths, first_frame_segmentation
-    error_occurred = pyqtSignal(str)  # error message
-
-    def __init__(self, frame_paths: List[str]):
+    def __init__(self):
         super().__init__()
-        self.frame_paths = frame_paths
-        self._cancelled = False
+        self._model = CellSAM(gpu=True)
 
-    def cancel(self):
-        """Cancel the processing"""
-        self._cancelled = True
-
-    def run(self):
+    def run(self, first_frame_path):
         """Run CellSAM processing on first frame only"""
         try:
-            self.status_update.emit("Initializing CellSAM model...")
-
-            # Initialize CellSAM model
-            model = CellSAM(gpu=True)
-
-            self.status_update.emit("Model loaded. Processing first frame...")
-
-            if self._cancelled or not self.frame_paths:
-                return
-
-            # Process only the first frame
-            first_frame_path = self.frame_paths[0]
 
             # Load and process first frame
             img = cv2.imread(first_frame_path)
             if img is None:
-                self.error_occurred.emit(
-                    f"Could not load first frame: {first_frame_path}"
-                )
-                return
+                raise RuntimeError(f"Failed to load first frame: {first_frame_path}")
 
             # Convert BGR to RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            self.status_update.emit("Running segmentation on first frame...")
-
             # Run segmentation on first frame
-            masks, flows, styles = model.segment(img, diameter=None)
+            masks, flows, styles = self._model.segment(img, diameter=None)
 
             # Store first frame results
-            first_frame_result = {
+            result = {
                 "frame_path": first_frame_path,
                 "masks": masks,
                 "flows": flows,
@@ -64,15 +33,10 @@ class CellSamWorker(QThread):
                 "original_image": img,
             }
 
-            self.status_update.emit("Cleaning up CellSAM model...")
-
-            # Clean up model to free memory
-            del model
-
-            self.status_update.emit("First frame processing complete!")
-
-            if not self._cancelled:
-                self.processing_complete.emit(self.frame_paths, first_frame_result)
+            return result
 
         except Exception as e:
-            self.error_occurred.emit(f"CellSAM processing failed: {str(e)}")
+            raise RuntimeError(f"CellSAM processing failed: {str(e)}")
+
+    def cleanup(self):
+        del self._model

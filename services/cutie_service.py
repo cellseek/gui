@@ -52,9 +52,6 @@ class CutieService:
             if self.cutie_worker is None:
                 raise RuntimeError("CUTIE worker not initialized")
 
-            if self._cutie_worker.isRunning():
-                raise RuntimeError("CUTIE worker is busy")
-
             # Use the step function to get prediction
             predicted_mask = self._cutie_worker.step(
                 previous_image, previous_mask, current_image, frame_index
@@ -63,5 +60,4 @@ class CutieService:
             return predicted_mask
 
         except Exception as e:
-            print(f"CUTIE tracking failed: {str(e)}")
-            return None
+            raise RuntimeError(f"Tracking failed: {str(e)}")

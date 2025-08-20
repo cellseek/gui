@@ -52,14 +52,6 @@ class FrameByFrameWidget(QWidget):
         self.setup_ui()
         self.setup_shortcuts()
 
-    def __del__(self):
-        """Cleanup when widget is destroyed."""
-        try:
-            # Cancel and cleanup workers via services
-            self.sam_service.cleanup_sam_worker()
-        except:
-            pass  # Ignore cleanup errors during destruction
-
     def setup_ui(self):
         """Setup the user interface"""
         layout = QVBoxLayout(self)
@@ -286,7 +278,7 @@ class FrameByFrameWidget(QWidget):
             return
 
         try:
-            # Initialize SAM worker (will emit its own status updates)
+            # Initialize SAM worker
             if self.sam_service.sam_worker is None:
                 raise RuntimeError("Failed to initialize SAM model")
 

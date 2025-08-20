@@ -5,7 +5,7 @@ New main window for frame-by-frame cell tracking workflow
 from typing import List
 
 import psutil
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -123,16 +123,6 @@ class MainWindow(QMainWindow):
         """Show error message box"""
         QMessageBox.critical(self, title, message)
 
-    def initialize_tracking_models(self) -> None:
-        """Initialize SAM and CUTIE models after CellSAM processing"""
-        try:
-            self.emit_status_update("Initializing tracking models...")
-            # Initialize models in frame-by-frame widget
-            self.frame_by_frame_widget.initialize_models()
-            self.emit_status_update("Tracking models loaded successfully")
-        except Exception as e:
-            self.show_error("Error", f"Failed to initialize tracking models: {str(e)}")
-
     def on_cellsam_processing_complete(
         self, frame_paths: List[str], first_frame_result: dict
     ) -> None:
@@ -149,6 +139,15 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.show_error("Error", f"Failed to load processed frames: {str(e)}")
 
+        """Initialize SAM and CUTIE models"""
+        try:
+            self.emit_status_update("Initializing tracking models...")
+            # Initialize models in frame-by-frame widget
+            self.frame_by_frame_widget.initialize_models()
+            self.emit_status_update("Tracking models loaded successfully")
+        except Exception as e:
+            self.show_error("Error", f"Failed to initialize tracking models: {str(e)}")
+
     def on_status_update(self, message: str):
         """Handle status updates"""
         self.status_label.setText(message)
@@ -158,46 +157,3 @@ class MainWindow(QMainWindow):
         process = psutil.Process()
         memory_mb = process.memory_info().rss / 1024 / 1024
         self.memory_label.setText(f"Memory: {memory_mb:.0f} MB")
-
-    def go_back_to_import(self):
-        reply = QMessageBox.question(
-            self,
-            "Go Back",
-            "Are you sure you want to go back to import? All current work will be lost.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            # Cancel any ongoing CellSAM processing
-            self.cellsam_service.cancel_processing()
-
-            # Clean up current work
-            self.frame_by_frame_widget = FrameByFrameWidget()
-            self.stacked_widget.removeWidget(self.stacked_widget.widget(1))
-            self.stacked_widget.addWidget(self.frame_by_frame_widget)
-
-            # Reconnect signals
-            self.frame_by_frame_widget.status_update.connect(self.on_status_update)
-
-            # Switch to import screen
-            self.stacked_widget.setCurrentIndex(0)
-            self.status_label.setText("Ready - Import video or images to begin")
-
-    def closeEvent(self, event):
-        """Handle window close event"""
-        # Clean up services
-        self.cellsam_service.cleanup()
-
-        # Clean up temporary files
-        if hasattr(self.media_import_widget, "cleanup"):
-            self.media_import_widget.cleanup()
-
-        event.accept()
-
-    def keyPressEvent(self, event):
-        """Handle global key press events"""
-        # Allow Escape key to go back from frame-by-frame to import
-        if event.key() == Qt.Key.Key_Escape and self.stacked_widget.currentIndex() == 1:
-            self.go_back_to_import()
-        else:
-            super().keyPressEvent(event)

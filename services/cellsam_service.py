@@ -4,8 +4,6 @@ CellSAM service for handling cell segmentation functionality
 
 from typing import List, Optional, Protocol
 
-import numpy as np
-
 from workers.cellsam_worker import CellSamWorker
 
 
@@ -43,21 +41,12 @@ class CellSamService:
             )
             return False
 
-        if self._cellsam_worker is not None:
-            self.delegate.show_error("Error", "CellSAM processing already in progress")
-            return False
-
         try:
             # Create and configure worker
-            self._cellsam_worker = CellSamWorker(frame_paths)
-            self._cellsam_worker.status_update.connect(self._on_status_update)
-            self._cellsam_worker.processing_complete.connect(
-                self._on_processing_complete
-            )
-            self._cellsam_worker.error_occurred.connect(self._on_error_occurred)
+            self._cellsam_worker = CellSamWorker()
 
-            # Start processing
             self._cellsam_worker.start()
+            self._cellsam_worker.run(frame_paths[0])
             self.delegate.emit_status_update("Initializing CellSAM segmentation...")
 
             return True
@@ -79,12 +68,6 @@ class CellSamService:
     def is_processing(self) -> bool:
         """Check if CellSAM processing is currently running"""
         return self._cellsam_worker is not None
-
-    def cleanup(self) -> None:
-        """Cleanup CellSAM resources"""
-        if self._cellsam_worker is not None:
-            self._cellsam_worker.cancel()
-            self._cellsam_worker = None
 
     def _on_status_update(self, status: str) -> None:
         """Handle status updates from CellSAM worker"""

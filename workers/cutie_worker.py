@@ -2,18 +2,12 @@ from typing import List, Optional
 
 import numpy as np
 import torch
+from cutie.cutie_tracker import CutieTracker
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
-class CutieWorker(QThread):
+class CutieWorker:
     """Worker thread for CUTIE tracking"""
-
-    status_update = pyqtSignal(str)  # status message
-    tracking_complete = pyqtSignal(dict)  # results: {frame_idx: masks}
-    frame_tracked = pyqtSignal(
-        int, np.ndarray
-    )  # frame_idx, masks for single frame tracking
-    error_occurred = pyqtSignal(str)  # error message
 
     def __init__(self):
         """
@@ -26,18 +20,8 @@ class CutieWorker(QThread):
 
         # Initialize CUTIE tracker
         try:
-            from cutie.cutie_tracker import CutieTracker
-
             self.tracker = CutieTracker()
-            print("CUTIE tracker initialized successfully")
-        except ImportError as e:
-            print(f"Failed to import CutieTracker: {e}")
-            raise RuntimeError(f"CUTIE not properly installed: {e}")
         except Exception as e:
-            import traceback
-
-            print(f"Failed to initialize CutieTracker: {e}")
-            print(f"Traceback: {traceback.format_exc()}")
             raise RuntimeError(f"Failed to initialize CUTIE tracker: {e}")
 
     def cancel(self):
@@ -70,16 +54,6 @@ class CutieWorker(QThread):
         if self.tracker is None:
             raise RuntimeError("CUTIE tracker not initialized")
 
-        # Validate inputs
-        if previous_image is None:
-            raise ValueError("Previous image is required for tracking")
-
-        if previous_mask is None:
-            raise ValueError("Previous mask is required for tracking")
-
-        if current_image is None:
-            raise ValueError("Current image is required for tracking")
-
         self.status_update.emit(f"Tracking frame {frame_index + 1}...")
 
         # Use the new track method that handles both steps internally
@@ -96,13 +70,3 @@ class CutieWorker(QThread):
             self.frame_tracked.emit(frame_index, predicted_mask)
 
         return predicted_mask
-
-    def cleanup(self):
-        """Clean up tracker resources"""
-        try:
-            if hasattr(self, "tracker"):
-                del self.tracker
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception as e:
-            print(f"Warning: Failed to clean up tracker: {e}")
