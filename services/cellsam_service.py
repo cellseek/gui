@@ -4,6 +4,8 @@ CellSAM service for handling cell segmentation functionality
 
 from typing import List, Optional, Protocol
 
+import numpy as np
+
 from workers.cellsam_worker import CellSamWorker
 
 
@@ -12,10 +14,6 @@ class CellSamServiceDelegate(Protocol):
 
     def emit_status_update(self, message: str) -> None: ...
     def show_error(self, title: str, message: str) -> None: ...
-    def on_cellsam_processing_complete(
-        self, frame_paths: List[str], first_frame_result: dict
-    ) -> None: ...
-    def initialize_tracking_models(self) -> None: ...
 
 
 class CellSamService:
@@ -23,76 +21,11 @@ class CellSamService:
 
     def __init__(self, delegate: CellSamServiceDelegate):
         self.delegate = delegate
-        self._cellsam_worker: Optional[CellSamWorker] = None
-
-    def process_frames(self, frame_paths: List[str]) -> bool:
-        """
-        Start CellSAM processing on the first frame of the provided frame paths.
-
-        Args:
-            frame_paths: List of frame file paths to process
-
-        Returns:
-            True if processing started successfully, False otherwise
-        """
-        if not frame_paths:
-            self.delegate.show_error(
-                "Error", "No frames provided for CellSAM processing"
-            )
-            return False
-
-        try:
-            # Create and configure worker
-            self._cellsam_worker = CellSamWorker()
-
-            self._cellsam_worker.start()
-            self._cellsam_worker.run(frame_paths[0])
-            self.delegate.emit_status_update("Initializing CellSAM segmentation...")
-
-            return True
-
-        except Exception as e:
-            self.delegate.show_error(
-                "Error", f"Failed to start CellSAM processing: {str(e)}"
-            )
-            self._cellsam_worker = None
-            return False
-
-    def cancel_processing(self) -> None:
-        """Cancel ongoing CellSAM processing"""
-        if self._cellsam_worker is not None:
-            self._cellsam_worker.cancel()
-            self._cellsam_worker = None
-            self.delegate.emit_status_update("CellSAM processing cancelled")
-
-    def is_processing(self) -> bool:
-        """Check if CellSAM processing is currently running"""
-        return self._cellsam_worker is not None
+        self._cellsam_worker = CellSamWorker()
 
     def _on_status_update(self, status: str) -> None:
         """Handle status updates from CellSAM worker"""
         self.delegate.emit_status_update(status)
-
-    def _on_processing_complete(
-        self, frame_paths: List[str], first_frame_result: dict
-    ) -> None:
-        """Handle CellSAM processing completion"""
-        try:
-            # Clean up worker
-            self._cellsam_worker = None
-
-            # Notify delegate of completion
-            self.delegate.on_cellsam_processing_complete(
-                frame_paths, first_frame_result
-            )
-
-            # Initialize tracking models after CellSAM completion
-            self.delegate.initialize_tracking_models()
-
-        except Exception as e:
-            self.delegate.show_error(
-                "Error", f"Failed to handle CellSAM completion: {str(e)}"
-            )
 
     def _on_error_occurred(self, error_message: str) -> None:
         """Handle CellSAM processing errors"""
@@ -102,3 +35,13 @@ class CellSamService:
         # Show error and update status
         self.delegate.show_error("CellSAM Error", error_message)
         self.delegate.emit_status_update("CellSAM processing failed")
+
+    def segment_first_frame(self, first_frame_path: str) -> Optional[np.ndarray]:
+        try:
+            self._on_status_update("Starting CellSAM processing...")
+            result = self._cellsam_worker.run(first_frame_path)
+            self._on_status_update("CellSAM processing completed")
+            return result["masks"]
+        except Exception as e:
+            self._on_error_occurred(str(e))
+            return None

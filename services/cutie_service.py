@@ -2,11 +2,18 @@
 CUTIE tracking service for handling frame-by-frame tracking functionality
 """
 
-from typing import Optional
+from typing import Optional, Protocol
 
 import numpy as np
 
 from workers.cutie_worker import CutieWorker
+
+
+class CutieServiceDelegate(Protocol):
+    """Protocol for objects that can delegate CUTIE operations"""
+
+    def emit_status_update(self, message: str) -> None: ...
+    def show_error(self, title: str, message: str) -> None: ...
 
 
 class CutieService:
@@ -53,7 +60,7 @@ class CutieService:
                 raise RuntimeError("CUTIE worker not initialized")
 
             # Use the step function to get prediction
-            predicted_mask = self._cutie_worker.step(
+            predicted_mask = self._cutie_worker.track(
                 previous_image, previous_mask, current_image, frame_index
             )
 

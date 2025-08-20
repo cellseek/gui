@@ -52,6 +52,10 @@ class FrameByFrameWidget(QWidget):
         self.setup_ui()
         self.setup_shortcuts()
 
+    # ------------------------------------------------------------------------ #
+    # ------------------------------- UI setup ------------------------------- #
+    # ------------------------------------------------------------------------ #
+
     def setup_ui(self):
         """Setup the user interface"""
         layout = QVBoxLayout(self)
@@ -230,21 +234,11 @@ class FrameByFrameWidget(QWidget):
         QShortcut(QKeySequence("4"), self, lambda: self.remove_radio.setChecked(True))
         QShortcut(QKeySequence("5"), self, lambda: self.edit_id_radio.setChecked(True))
 
-        # Note: Removed 'S' shortcut for CellSAM as it now only runs automatically on first frame
+    # ------------------------------------------------------------------------ #
+    # ---------------------------- Initialization ---------------------------- #
+    # ------------------------------------------------------------------------ #
 
-    def load_frames(self, image_paths: List[str]):
-        """Load frames using lazy loading (don't load all images into memory)"""
-        self.storage_service.clear_all_data()
-
-        # Set image paths for lazy loading
-        self.storage_service.set_image_paths(image_paths)
-        self.storage_service.set_current_frame_index(0)
-        self.update_display()
-        self.status_update.emit(f"Loaded {len(image_paths)} frames (lazy loading)")
-
-    def load_frames_with_first_segmentation(
-        self, image_paths: List[str], first_frame_result: dict
-    ):
+    def initalize_ui(self, image_paths: List[str], first_frame_result: dict):
         """Load frames with first frame segmentation for tracking"""
         self.storage_service.clear_all_data()
 
@@ -292,6 +286,10 @@ class FrameByFrameWidget(QWidget):
 
         except Exception as e:
             raise RuntimeError(f"Failed to initialize models: {str(e)}")
+
+    # ------------------------------------------------------------------------ #
+    # -------------------------------- Display ------------------------------- #
+    # ------------------------------------------------------------------------ #
 
     def update_display(self):
         """Update the image display"""
@@ -380,19 +378,10 @@ class FrameByFrameWidget(QWidget):
                 self.storage_service.set_current_frame_index(next_index)
                 self.update_display()
 
-    def get_current_masks(self) -> Optional[np.ndarray]:
-        """Get masks for current frame"""
-        return self.storage_service.get_current_frame_masks()
+    # ------------------------------------------------------------------------ #
+    # --------------------------- Delegate Methods --------------------------- #
+    # ------------------------------------------------------------------------ #
 
-    def get_all_masks(self) -> Dict[int, np.ndarray]:
-        """Get all frame masks"""
-        return self.storage_service.get_frame_masks()
-
-    # Delegate methods for services
-
-    # StorageService delegates (already implemented via storage_service calls)
-
-    # AnnotationService delegates
     def get_current_frame_masks(self) -> Optional[np.ndarray]:
         """Delegate for annotation service"""
         return self.storage_service.get_current_frame_masks()
@@ -442,7 +431,6 @@ class FrameByFrameWidget(QWidget):
         """Delegate for annotation service"""
         self.curr_image_label.set_masks(masks)
 
-    # SamService delegates
     def get_current_frame(self) -> Optional[np.ndarray]:
         """Delegate for SAM service"""
         return self.storage_service.get_current_frame()

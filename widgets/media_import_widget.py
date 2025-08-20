@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 
 import cv2
+from natsort import natsorted
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
@@ -68,15 +69,8 @@ class MediaImportWidget(QWidget):
             self.process_files(file_paths)
 
     def process_files(self, file_paths: List[str]):
-        """Process the selected image files"""
-        if not file_paths:
-            return
+        """Process image files"""
 
-        # Process as image files
-        self.process_image_files(file_paths)
-
-    def process_image_files(self, file_paths: List[str]):
-        """Process image files directly"""
         # Validate all files are readable images
         valid_paths = []
 
@@ -101,8 +95,6 @@ class MediaImportWidget(QWidget):
 
         if valid_paths:
             # Sort paths naturally (frame_001.png, frame_002.png, etc.)
-            from natsort import natsorted
-
             sorted_paths = natsorted(valid_paths)
             self.frames_ready.emit(sorted_paths)
             self.status_update.emit(f"Loaded {len(sorted_paths)} image files")

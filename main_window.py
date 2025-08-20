@@ -24,6 +24,10 @@ from widgets.media_import_widget import MediaImportWidget
 class MainWindow(QMainWindow):
     """New main window for frame-by-frame cell tracking workflow"""
 
+    # ------------------------------------------------------------------------ #
+    # ---------------------------- Initialization ---------------------------- #
+    # ------------------------------------------------------------------------ #
+
     def __init__(self):
         super().__init__()
 
@@ -101,6 +105,10 @@ class MainWindow(QMainWindow):
         # Frame-by-frame connections
         self.frame_by_frame_widget.status_update.connect(self.on_status_update)
 
+    # ------------------------------------------------------------------------ #
+    # ----------------------------- UI Management ---------------------------- #
+    # ------------------------------------------------------------------------ #
+
     def center_on_screen(self):
         """Position the window at the center of the screen"""
         screen = self.screen().availableGeometry()
@@ -109,10 +117,6 @@ class MainWindow(QMainWindow):
         x = screen.center().x() - window.width() // 2
         y = screen.center().y() - window.height() // 2
         self.move(x, y)
-
-    def on_frames_ready(self, frame_paths: List[str]):
-        """Handle frames ready from media import - run CellSAM processing"""
-        self.cellsam_service.process_frames(frame_paths)
 
     # CellSamServiceDelegate methods
     def emit_status_update(self, message: str) -> None:
@@ -123,15 +127,35 @@ class MainWindow(QMainWindow):
         """Show error message box"""
         QMessageBox.critical(self, title, message)
 
+    def update_memory_usage(self):
+        """Update memory usage display"""
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        self.memory_label.setText(f"Memory: {memory_mb:.0f} MB")
+
+    # ------------------------------------------------------------------------ #
+    # ---------------------------- Event Handlers ---------------------------- #
+    # ------------------------------------------------------------------------ #
+
+    def on_status_update(self, message: str):
+        """Handle status updates"""
+        self.status_label.setText(message)
+
+    def on_frames_ready(self, frame_paths: List[str]):
+        """Handle frames ready from media import - run CellSAM processing"""
+        self.cellsam_service.segment_first_frame(frame_paths[0])
+
+    # ------------------------------------------------------------------------ #
+    # -------------------------- Service Integration ------------------------- #
+    # ------------------------------------------------------------------------ #
+
     def on_cellsam_processing_complete(
         self, frame_paths: List[str], first_frame_result: dict
     ) -> None:
         """Handle CellSAM processing completion"""
         try:
             # Load frames and first frame segmentation into frame-by-frame widget
-            self.frame_by_frame_widget.load_frames_with_first_segmentation(
-                frame_paths, first_frame_result
-            )
+            self.frame_by_frame_widget.initalize_ui(frame_paths, first_frame_result)
 
             # Switch to frame-by-frame screen
             self.stacked_widget.setCurrentIndex(1)
@@ -147,13 +171,3 @@ class MainWindow(QMainWindow):
             self.emit_status_update("Tracking models loaded successfully")
         except Exception as e:
             self.show_error("Error", f"Failed to initialize tracking models: {str(e)}")
-
-    def on_status_update(self, message: str):
-        """Handle status updates"""
-        self.status_label.setText(message)
-
-    def update_memory_usage(self):
-        """Update memory usage display"""
-        process = psutil.Process()
-        memory_mb = process.memory_info().rss / 1024 / 1024
-        self.memory_label.setText(f"Memory: {memory_mb:.0f} MB")
