@@ -43,5 +43,5 @@ class CellSamService:
             self._on_status_update("CellSAM processing completed")
             return result["masks"]
         except Exception as e:
-            self._on_error_occurred(str(e))
+            self._on_error_occurred(f"Failed to segment first frame: {str(e)}")
             return None

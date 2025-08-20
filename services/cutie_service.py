@@ -40,7 +40,6 @@ class CutieService:
         previous_image: np.ndarray,
         previous_mask: np.ndarray,
         current_image: np.ndarray,
-        frame_index: int,
     ) -> Optional[np.ndarray]:
         """
         Track the next frame using CUTIE.
@@ -49,7 +48,6 @@ class CutieService:
             previous_image: Previous frame image
             previous_mask: Mask from previous frame
             current_image: Current frame image to track
-            frame_index: Index of current frame
 
         Returns:
             Predicted mask for current frame, or None if tracking failed
@@ -61,7 +59,7 @@ class CutieService:
 
             # Use the step function to get prediction
             predicted_mask = self._cutie_worker.track(
-                previous_image, previous_mask, current_image, frame_index
+                previous_image, previous_mask, current_image
             )
 
             return predicted_mask

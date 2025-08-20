@@ -238,7 +238,7 @@ class FrameByFrameWidget(QWidget):
     # ---------------------------- Initialization ---------------------------- #
     # ------------------------------------------------------------------------ #
 
-    def initalize_ui(self, image_paths: List[str], first_frame_result: dict):
+    def initialize(self, image_paths: List[str], first_frame_mask: np.ndarray):
         """Load frames with first frame segmentation for tracking"""
         self.storage_service.clear_all_data()
 
@@ -246,25 +246,10 @@ class FrameByFrameWidget(QWidget):
         self.storage_service.set_image_paths(image_paths)
 
         # Extract first frame masks
-        first_frame_masks = first_frame_result["masks"]
-        if first_frame_masks is not None and first_frame_masks.size > 0:
-            self.storage_service.set_mask_for_frame(
-                0, first_frame_masks.astype(np.uint16)
-            )
-        else:
-            QMessageBox.warning(
-                self, "Load Error", "No masks found in first frame segmentation"
-            )
-            return
+        self.storage_service.set_mask_for_frame(0, first_frame_mask.astype(np.uint16))
 
         self.storage_service.set_current_frame_index(0)
         self.update_display()
-
-        # Show status
-        cell_count = np.max(first_frame_masks) if first_frame_masks.size > 0 else 0
-        self.status_update.emit(
-            f"Loaded {len(image_paths)} frames. Found {cell_count} cells in first frame. Ready for tracking."
-        )
 
     def initialize_models(self):
         """Initialize SAM and CUTIE models for tracking"""
@@ -353,7 +338,7 @@ class FrameByFrameWidget(QWidget):
 
                 # Run CUTIE tracking
                 predicted_mask = self.cutie_service.track(
-                    previous_image, previous_mask, current_image, next_index
+                    previous_image, previous_mask, current_image
                 )
 
                 if predicted_mask is not None:

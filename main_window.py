@@ -143,31 +143,14 @@ class MainWindow(QMainWindow):
 
     def on_frames_ready(self, frame_paths: List[str]):
         """Handle frames ready from media import - run CellSAM processing"""
-        self.cellsam_service.segment_first_frame(frame_paths[0])
 
-    # ------------------------------------------------------------------------ #
-    # -------------------------- Service Integration ------------------------- #
-    # ------------------------------------------------------------------------ #
+        first_frame_mask = self.cellsam_service.segment_first_frame(frame_paths[0])
 
-    def on_cellsam_processing_complete(
-        self, frame_paths: List[str], first_frame_result: dict
-    ) -> None:
-        """Handle CellSAM processing completion"""
-        try:
-            # Load frames and first frame segmentation into frame-by-frame widget
-            self.frame_by_frame_widget.initalize_ui(frame_paths, first_frame_result)
+        # Load frames and first frame segmentation into frame-by-frame widget
+        self.frame_by_frame_widget.initialize(frame_paths, first_frame_mask)
 
-            # Switch to frame-by-frame screen
-            self.stacked_widget.setCurrentIndex(1)
+        # Initialize models
+        self.frame_by_frame_widget.initialize_models()
 
-        except Exception as e:
-            self.show_error("Error", f"Failed to load processed frames: {str(e)}")
-
-        """Initialize SAM and CUTIE models"""
-        try:
-            self.emit_status_update("Initializing tracking models...")
-            # Initialize models in frame-by-frame widget
-            self.frame_by_frame_widget.initialize_models()
-            self.emit_status_update("Tracking models loaded successfully")
-        except Exception as e:
-            self.show_error("Error", f"Failed to initialize tracking models: {str(e)}")
+        # Switch to frame-by-frame screen
+        self.stacked_widget.setCurrentIndex(1)
