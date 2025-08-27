@@ -82,23 +82,37 @@ class SamWorker(QThread):
         """
         import cv2
 
-        # SAM expects a low-resolution mask input (256x256)
-        # First, get the original image size that was set in the predictor
-        original_size = self.predictor.original_size  # (H, W)
-        
-        # Resize the mask to SAM's input size (256x256)
-        # The predictor automatically handles the transformation from low-res to original size
+        # Check if mask has any content
+        if not np.any(mask_prompt > 0):
+            # Return empty mask if no brush strokes
+            return np.zeros_like(mask_prompt, dtype=bool), 0.0
+
+        # SAM's mask input should be a low-resolution logit mask
+        # Resize to 256x256 (SAM's expected input size)
+        h, w = mask_prompt.shape
         mask_input = cv2.resize(mask_prompt.astype(np.uint8), (256, 256), interpolation=cv2.INTER_NEAREST)
         
-        # Convert to float32 and normalize to 0-1 range
-        mask_input = mask_input.astype(np.float32) / 255.0
+        # Convert to float32 logits
+        # Positive values (>0) indicate positive prompts, negative values indicate negative prompts
+        # We want high positive values for brush areas
+        mask_logits = np.where(mask_input > 0, 10.0, -10.0).astype(np.float32)
 
-        masks, scores, logits = self.predictor.predict(
-            mask_input=mask_input[None, :, :],  # Add batch dimension
-            multimask_output=False,
-        )
+        print(f"Debug: mask_input range: {mask_input.min()}-{mask_input.max()}")
+        print(f"Debug: mask_logits range: {mask_logits.min()}-{mask_logits.max()}")
+        print(f"Debug: positive pixels in logits: {np.sum(mask_logits > 0)}")
 
-        mask = masks[0]
-        score = scores[0]
+        try:
+            masks, scores, logits = self.predictor.predict(
+                mask_input=mask_logits[None, :, :],  # Add batch dimension
+                multimask_output=False,  # Start with single mask to see behavior
+            )
 
-        return mask, score
+            mask = masks[0]
+            score = scores[0]
+
+            return mask, score
+        
+        except Exception as e:
+            print(f"SAM mask prediction error: {e}")
+            # Return the original brush mask as fallback
+            return mask_prompt > 0, 0.5

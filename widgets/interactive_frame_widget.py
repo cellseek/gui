@@ -599,8 +599,32 @@ class InteractiveFrameWidget(QLabel):
             new_zoom = self.zoom_factor * zoom_factor
             new_zoom = max(0.1, min(10.0, new_zoom))  # Limit zoom range
 
-            if new_zoom != self.zoom_factor:
+            if new_zoom != self.zoom_factor and self.image is not None:
+                # Get mouse position
+                mouse_pos = event.position().toPoint()
+                mouse_x, mouse_y = mouse_pos.x(), mouse_pos.y()
+                
+                # Calculate the image coordinates under the mouse before zoom
+                image_coords_before = self._widget_to_image_coords(mouse_x, mouse_y)
+                
+                # Update zoom factor
+                old_zoom = self.zoom_factor
                 self.zoom_factor = new_zoom
+                
+                # Calculate the widget coordinates where the same image point would be after zoom
+                widget_coords_after = self._image_to_widget_coords(
+                    image_coords_before[0], image_coords_before[1]
+                )
+                
+                # Adjust pan offset to keep the image point under the mouse cursor
+                pan_adjust_x = mouse_x - widget_coords_after[0]
+                pan_adjust_y = mouse_y - widget_coords_after[1]
+                
+                self.pan_offset = (
+                    self.pan_offset[0] + pan_adjust_x,
+                    self.pan_offset[1] + pan_adjust_y
+                )
+                
                 self.update_display()
 
             event.accept()
@@ -681,22 +705,8 @@ class InteractiveFrameWidget(QLabel):
             painter.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
 
         # Draw current brush stroke during drawing
-        if (
-            self.annotation_mode == AnnotationMode.BRUSH_ADD
-            and self.drawing_brush
-            and len(self.brush_points) > 1
-        ):
-            painter.setPen(QPen(QColor(255, 255, 0), 3, Qt.PenStyle.SolidLine))
-
-            # Draw lines connecting brush points
-            for i in range(1, len(self.brush_points)):
-                x1, y1 = self._image_to_widget_coords(
-                    self.brush_points[i - 1][0], self.brush_points[i - 1][1]
-                )
-                x2, y2 = self._image_to_widget_coords(
-                    self.brush_points[i][0], self.brush_points[i][1]
-                )
-                painter.drawLine(x1, y1, x2, y2)
+        # Note: Brush path visualization removed for cleaner UI
+        # The brush mask overlay already shows the painted area
 
         # Draw brush preview circle for brush mode
         if (

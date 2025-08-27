@@ -151,9 +151,19 @@ class SamService:
             self.delegate.show_warning("SAM Error", "Failed to load current frame")
             return
 
+        # Debug: Check brush mask properties
+        brush_pixels = np.sum(brush_mask > 0)
+        total_pixels = brush_mask.shape[0] * brush_mask.shape[1]
+        print(f"Brush mask shape: {brush_mask.shape}, non-zero pixels: {brush_pixels}")
+
         try:
             # Predict with already loaded image and brush mask
             mask, score = self.sam_worker.predict_mask(brush_mask)
+
+            mask_pixels = np.sum(mask > 0) if mask is not None else 0
+            coverage_percent = (mask_pixels / total_pixels) * 100 if total_pixels > 0 else 0
+            print(f"SAM returned mask with shape: {mask.shape}, score: {score:.4f}")
+            print(f"Resulting mask has {mask_pixels} pixels ({coverage_percent:.1f}% coverage)")
 
             # Emit the result directly
             self.on_sam_complete(mask, score)
