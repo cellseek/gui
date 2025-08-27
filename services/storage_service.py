@@ -36,9 +36,7 @@ class StorageService:
 
         # Preprocess images for optimal performance
         try:
-            self._processed_paths, scale_factors = (
-                self._preprocessor.preprocess_image_list(paths)
-            )
+            self._processed_paths = self._preprocessor.preprocess_image_list(paths)
         except Exception as e:
             print(f"Warning: Image preprocessing failed: {e}")
             # Fallback to original paths

@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QSlider,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -158,9 +159,57 @@ class FrameByFrameWidget(QWidget):
         self.mode_group.addButton(self.edit_id_radio)
         tools_layout.addWidget(self.edit_id_radio)
 
+        self.brush_radio = QRadioButton("Brush (6)")
+        self.brush_radio.toggled.connect(
+            lambda: self.annotation_service.set_annotation_mode(
+                self.curr_image_label, AnnotationMode.BRUSH_ADD
+            )
+        )
+        self.mode_group.addButton(self.brush_radio)
+        tools_layout.addWidget(self.brush_radio)
+
         tools_layout.addStretch()
 
         main_layout.addLayout(tools_layout)
+
+        # Additional controls row: Transparency and brush size
+        controls_layout = QHBoxLayout()
+
+        # Mask transparency control
+        transparency_label = QLabel("Mask Opacity:")
+        controls_layout.addWidget(transparency_label)
+
+        self.transparency_slider = QSlider(Qt.Orientation.Horizontal)
+        self.transparency_slider.setRange(0, 100)
+        self.transparency_slider.setValue(30)  # Default 30% opacity
+        self.transparency_slider.setFixedWidth(100)
+        self.transparency_slider.valueChanged.connect(self.on_transparency_changed)
+        controls_layout.addWidget(self.transparency_slider)
+
+        self.transparency_value_label = QLabel("30%")
+        self.transparency_value_label.setFixedWidth(35)
+        controls_layout.addWidget(self.transparency_value_label)
+
+        controls_layout.addSpacing(20)
+
+        # Brush size control
+        brush_size_label = QLabel("Brush Size:")
+        controls_layout.addWidget(brush_size_label)
+
+        self.brush_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brush_size_slider.setRange(5, 50)
+        self.brush_size_slider.setValue(10)  # Default size
+        self.brush_size_slider.setFixedWidth(100)
+        self.brush_size_slider.valueChanged.connect(self.on_brush_size_changed)
+        controls_layout.addWidget(self.brush_size_slider)
+
+        self.brush_size_value_label = QLabel("10px")
+        self.brush_size_value_label.setFixedWidth(35)
+        controls_layout.addWidget(self.brush_size_value_label)
+
+        controls_layout.addStretch()
+
+        main_layout.addLayout(controls_layout)
 
         parent_layout.addWidget(merged_group)
 
@@ -200,6 +249,7 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label = InteractiveFrameWidget()
         self.curr_image_label.point_clicked.connect(self.sam_service.on_point_clicked)
         self.curr_image_label.box_drawn.connect(self.sam_service.on_box_drawn)
+        self.curr_image_label.brush_drawn.connect(self.sam_service.on_brush_drawn)
         self.curr_image_label.mask_clicked.connect(
             self.annotation_service.on_mask_clicked
         )
@@ -233,6 +283,26 @@ class FrameByFrameWidget(QWidget):
         QShortcut(QKeySequence("3"), self, lambda: self.box_radio.setChecked(True))
         QShortcut(QKeySequence("4"), self, lambda: self.remove_radio.setChecked(True))
         QShortcut(QKeySequence("5"), self, lambda: self.edit_id_radio.setChecked(True))
+        QShortcut(QKeySequence("6"), self, lambda: self.brush_radio.setChecked(True))
+
+        # View controls
+        QShortcut(QKeySequence("R"), self, lambda: self.curr_image_label.reset_view())
+
+    # ------------------------------------------------------------------------ #
+    # ------------------------------- Callbacks ------------------------------ #
+    # ------------------------------------------------------------------------ #
+
+    def on_transparency_changed(self, value):
+        """Handle transparency slider change"""
+        transparency = value / 100.0  # Convert to 0-1 range
+        self.transparency_value_label.setText(f"{value}%")
+        self.curr_image_label.set_mask_transparency(transparency)
+        self.prev_image_label.set_mask_transparency(transparency)
+
+    def on_brush_size_changed(self, value):
+        """Handle brush size slider change"""
+        self.brush_size_value_label.setText(f"{value}px")
+        self.curr_image_label.set_brush_size(value)
 
     # ------------------------------------------------------------------------ #
     # ---------------------------- Initialization ---------------------------- #
