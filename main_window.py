@@ -4,6 +4,7 @@ New main window for frame-by-frame cell tracking workflow
 
 from typing import List
 
+import numpy as np
 import psutil
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
@@ -144,10 +145,40 @@ class MainWindow(QMainWindow):
     def on_frames_ready(self, frame_paths: List[str]):
         """Handle frames ready from media import - run CellSAM processing"""
 
-        first_frame_mask = self.cellsam_service.segment_first_frame(frame_paths[0])
+        # First, preprocess the frames by setting them in storage service
+        # This will trigger the image preprocessing (resizing) internally
+        self.frame_by_frame_widget.storage_service.set_image_paths(frame_paths)
 
-        # Load frames and first frame segmentation into frame-by-frame widget
-        self.frame_by_frame_widget.initialize(frame_paths, first_frame_mask)
+        # Get the processed path for the first frame
+        first_frame_processed_path = (
+            self.frame_by_frame_widget.storage_service.get_processed_path(0)
+        )
+        if first_frame_processed_path is None:
+            # Fallback to original path if preprocessing failed
+            first_frame_processed_path = frame_paths[0]
+
+        # Run CellSAM on the processed first frame
+        first_frame_masks = self.cellsam_service.segment_first_frame(
+            first_frame_processed_path
+        )
+
+        if first_frame_masks is not None:
+            # Initialize with CellSAM results
+            # Note: masks are kept at processed size to match displayed images
+            self.frame_by_frame_widget.initialize(frame_paths, first_frame_masks)
+            self.status_label.setText("Frames loaded with CellSAM segmentation")
+        else:
+            # CellSAM failed, show error but still allow manual annotation
+            self.show_error(
+                "CellSAM Error",
+                "Failed to segment first frame. You can manually annotate the first frame.",
+            )
+            # Create a dummy mask for initialization
+            dummy_mask = np.zeros(
+                (512, 512), dtype=np.uint16
+            )  # Will be resized by initialize
+            self.frame_by_frame_widget.initialize(frame_paths, dummy_mask)
+            self.status_label.setText("Frames loaded - manual annotation required")
 
         # Initialize models
         self.frame_by_frame_widget.initialize_models()

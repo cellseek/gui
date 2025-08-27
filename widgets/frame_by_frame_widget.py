@@ -240,7 +240,12 @@ class FrameByFrameWidget(QWidget):
 
     def initialize(self, image_paths: List[str], first_frame_mask: np.ndarray):
         """Load frames with first frame segmentation for tracking"""
-        self.storage_service.clear_all_data()
+        # Only clear data if we're loading different images
+        if (
+            not hasattr(self.storage_service, "_image_paths")
+            or self.storage_service._image_paths != image_paths
+        ):
+            self.storage_service.clear_all_data()
 
         # Set image paths for lazy loading
         self.storage_service.set_image_paths(image_paths)

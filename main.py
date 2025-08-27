@@ -8,17 +8,12 @@ This script launches the new CellSeek frame-by-frame GUI application for cell se
 import sys
 from pathlib import Path
 
-# Add project paths to sys.path
-current_dir = Path(__file__).parent
-project_root = current_dir.parent
-
-
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from main_window import MainWindow
 
-__version__ = "2.0.0"
+__version__ = "1.0.0"
 __author__ = "CellSeek Team"
 
 
@@ -32,6 +27,8 @@ class CellSeekApp(QApplication):
         self.setApplicationName("CellSeek Frame-by-Frame")
         self.setApplicationVersion(__version__)
         self.setOrganizationName("CellSeek Team")
+
+        current_dir = Path(__file__).parent
 
         # Set application icon if available
         icon_path = current_dir / "resources" / "icon.png"
