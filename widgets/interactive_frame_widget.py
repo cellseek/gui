@@ -13,7 +13,6 @@ class AnnotationMode(Enum):
     VIEW = "view"
     CLICK_ADD = "click_add"
     BOX_ADD = "box_add"
-    BRUSH_ADD = "brush_add"
     MASK_REMOVE = "mask_remove"
     EDIT_CELL_ID = "edit_cell_id"
 
@@ -23,7 +22,6 @@ class InteractiveFrameWidget(QLabel):
 
     point_clicked = pyqtSignal(tuple)  # (x, y)
     box_drawn = pyqtSignal(tuple)  # (x1, y1, x2, y2)
-    brush_drawn = pyqtSignal(np.ndarray)  # brush mask
     mask_clicked = pyqtSignal(tuple)  # (x, y) for mask removal
     cell_id_edit_requested = pyqtSignal(tuple, int)  # (x, y), current_cell_id
     mouse_hover = pyqtSignal(tuple)  # (x, y) for live preview
@@ -56,15 +54,11 @@ class InteractiveFrameWidget(QLabel):
         self.box_start = None
         self.box_end = None
 
-        # Brush drawing
-        self.drawing_brush = False
-        self.brush_mask = None
-        self.brush_size = 10
-        self.brush_points = []
-        self._last_mouse_pos = None
-
         # Enable mouse tracking for hover events
         self.setMouseTracking(True)
+
+        # Cell ID overlay toggle
+        self.show_cell_ids = True
 
     def set_annotation_mode(self, mode: AnnotationMode):
         """Set the annotation mode"""
@@ -73,12 +67,6 @@ class InteractiveFrameWidget(QLabel):
         # Clear preview when not in click mode
         if mode != AnnotationMode.CLICK_ADD:
             self.preview_mask = None
-            self.update_display()
-
-        # Clear brush when not in brush mode
-        if mode != AnnotationMode.BRUSH_ADD:
-            self.brush_mask = None
-            self.brush_points = []
             self.update_display()
 
         if mode == AnnotationMode.VIEW:
@@ -91,8 +79,11 @@ class InteractiveFrameWidget(QLabel):
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif mode == AnnotationMode.BOX_ADD:
             self.setCursor(Qt.CursorShape.CrossCursor)
-        elif mode == AnnotationMode.BRUSH_ADD:
-            self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def set_show_cell_ids(self, show: bool):
+        """Toggle cell ID overlay visibility"""
+        self.show_cell_ids = show
+        self.update_display()
 
     def set_image(self, image: np.ndarray):
         """Set the base image"""
@@ -114,10 +105,6 @@ class InteractiveFrameWidget(QLabel):
         """Set the transparency for mask overlay (0.0 = transparent, 1.0 = opaque)"""
         self.mask_transparency = max(0.0, min(1.0, transparency))
         self.update_display()
-
-    def set_brush_size(self, size: int):
-        """Set the brush size for brush annotation mode"""
-        self.brush_size = max(1, size)
 
     def set_zoom_factor(self, zoom: float):
         """Set the zoom factor"""
@@ -159,13 +146,6 @@ class InteractiveFrameWidget(QLabel):
             and self.annotation_mode == AnnotationMode.CLICK_ADD
         ):
             display_image = self._overlay_preview_mask(display_image, self.preview_mask)
-
-        # Overlay brush mask if available and in brush mode
-        if (
-            self.brush_mask is not None
-            and self.annotation_mode == AnnotationMode.BRUSH_ADD
-        ):
-            display_image = self._overlay_brush_mask(display_image, self.brush_mask)
 
         # Convert to QPixmap and store for painting
         h, w = display_image.shape[:2]
@@ -227,7 +207,9 @@ class InteractiveFrameWidget(QLabel):
                     np.uint8
                 )
 
-        overlay = self._add_cell_id_text(overlay, masks, colors)
+        # Only add cell ID text if enabled
+        if self.show_cell_ids:
+            overlay = self._add_cell_id_text(overlay, masks, colors)
 
         return overlay
 
@@ -340,23 +322,6 @@ class InteractiveFrameWidget(QLabel):
 
         return overlay
 
-    def _overlay_brush_mask(
-        self, image: np.ndarray, brush_mask: np.ndarray
-    ) -> np.ndarray:
-        """Overlay brush mask with a semi-transparent green color"""
-        if brush_mask is None:
-            return image
-
-        overlay = image.copy()
-        # Use green color for brush with medium transparency
-        brush_color = np.array([0, 255, 0], dtype=np.uint8)  # Green
-        mask = brush_mask > 0
-        if np.any(mask):
-            # Medium transparency for brush strokes
-            overlay[mask] = (0.7 * overlay[mask] + 0.3 * brush_color).astype(np.uint8)
-
-        return overlay
-
     def _widget_to_image_coords(self, widget_x: int, widget_y: int) -> Tuple[int, int]:
         """Convert widget coordinates to image coordinates accounting for pan and zoom"""
         if self.image is None:
@@ -463,16 +428,6 @@ class InteractiveFrameWidget(QLabel):
                 self.box_start = image_coords
                 self.box_end = image_coords
 
-        elif self.annotation_mode == AnnotationMode.BRUSH_ADD:
-            if event.button() == Qt.MouseButton.LeftButton:
-                self.drawing_brush = True
-                # Initialize brush mask if needed
-                if self.brush_mask is None and self.image is not None:
-                    h, w = self.image.shape[:2]
-                    self.brush_mask = np.zeros((h, w), dtype=np.uint8)
-                self.brush_points = [image_coords]
-                self._add_brush_stroke(image_coords)
-
         elif self.annotation_mode == AnnotationMode.MASK_REMOVE:
             self.mask_clicked.emit(image_coords)
 
@@ -531,21 +486,10 @@ class InteractiveFrameWidget(QLabel):
         if self.annotation_mode == AnnotationMode.BOX_ADD and self.drawing_box:
             self.box_end = self._widget_to_image_coords(pos.x(), pos.y())
             self.update()  # Trigger repaint to show box
-        elif self.annotation_mode == AnnotationMode.BRUSH_ADD and self.drawing_brush:
-            image_coords = self._widget_to_image_coords(pos.x(), pos.y())
-            self.brush_points.append(image_coords)
-            self._add_brush_stroke(image_coords)
-            # Don't call SAM here - wait for mouse release
-            # Update to show current brush stroke
-            self.update()
         elif self.annotation_mode == AnnotationMode.CLICK_ADD:
             # Emit hover signal for live preview
             image_coords = self._widget_to_image_coords(pos.x(), pos.y())
             self.mouse_hover.emit(image_coords)
-
-        # Always update brush preview when in brush mode
-        if self.annotation_mode == AnnotationMode.BRUSH_ADD:
-            self.update()
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release events"""
@@ -571,15 +515,6 @@ class InteractiveFrameWidget(QLabel):
             self.box_start = None
             self.box_end = None
             self.update()
-        elif self.annotation_mode == AnnotationMode.BRUSH_ADD and self.drawing_brush:
-            self.drawing_brush = False
-            if self.brush_mask is not None:
-                # Emit the brush mask for SAM processing
-                self.brush_drawn.emit(self.brush_mask.copy())
-                # Clear the brush mask for next stroke
-                self.brush_mask = None
-                self.brush_points = []
-                self.update_display()
 
     def wheelEvent(self, event):
         """Handle mouse wheel events for zooming"""
@@ -603,60 +538,33 @@ class InteractiveFrameWidget(QLabel):
                 # Get mouse position
                 mouse_pos = event.position().toPoint()
                 mouse_x, mouse_y = mouse_pos.x(), mouse_pos.y()
-                
+
                 # Calculate the image coordinates under the mouse before zoom
                 image_coords_before = self._widget_to_image_coords(mouse_x, mouse_y)
-                
+
                 # Update zoom factor
                 old_zoom = self.zoom_factor
                 self.zoom_factor = new_zoom
-                
+
                 # Calculate the widget coordinates where the same image point would be after zoom
                 widget_coords_after = self._image_to_widget_coords(
                     image_coords_before[0], image_coords_before[1]
                 )
-                
+
                 # Adjust pan offset to keep the image point under the mouse cursor
                 pan_adjust_x = mouse_x - widget_coords_after[0]
                 pan_adjust_y = mouse_y - widget_coords_after[1]
-                
+
                 self.pan_offset = (
                     self.pan_offset[0] + pan_adjust_x,
-                    self.pan_offset[1] + pan_adjust_y
+                    self.pan_offset[1] + pan_adjust_y,
                 )
-                
+
                 self.update_display()
 
             event.accept()
         else:
             super().wheelEvent(event)
-
-    def _add_brush_stroke(self, center_point):
-        """Add a brush stroke at the given center point"""
-        if self.brush_mask is None or self.image is None:
-            return
-
-        x, y = center_point
-        h, w = self.image.shape[:2]
-
-        # Create circular brush
-        radius = self.brush_size // 2
-
-        # Get bounds for the brush stroke
-        y_min = max(0, y - radius)
-        y_max = min(h, y + radius + 1)
-        x_min = max(0, x - radius)
-        x_max = min(w, x + radius + 1)
-
-        # Create circular mask for this stroke
-        for py in range(y_min, y_max):
-            for px in range(x_min, x_max):
-                distance = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
-                if distance <= radius:
-                    self.brush_mask[py, px] = 255
-
-        # Update display to show live brush stroke
-        self.update_display()
 
     def paintEvent(self, event):
         """Custom paint event to draw image with transformations and overlays"""
@@ -703,29 +611,3 @@ class InteractiveFrameWidget(QLabel):
             x2, y2 = self._image_to_widget_coords(self.box_end[0], self.box_end[1])
 
             painter.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
-
-        # Draw current brush stroke during drawing
-        # Note: Brush path visualization removed for cleaner UI
-        # The brush mask overlay already shows the painted area
-
-        # Draw brush preview circle for brush mode
-        if (
-            self.annotation_mode == AnnotationMode.BRUSH_ADD
-            and hasattr(self, "_last_mouse_pos")
-            and self._last_mouse_pos
-        ):
-            painter.setPen(QPen(QColor(0, 255, 0), 2, Qt.PenStyle.SolidLine))
-
-            # Calculate the brush radius in widget coordinates
-            if self.image is not None:
-                brush_radius_widget = max(
-                    1, int(self.brush_size * self.scale_factor / 2)
-                )
-
-                # Draw brush preview circle at last mouse position
-                painter.drawEllipse(
-                    self._last_mouse_pos.x() - brush_radius_widget,
-                    self._last_mouse_pos.y() - brush_radius_widget,
-                    brush_radius_widget * 2,
-                    brush_radius_widget * 2,
-                )

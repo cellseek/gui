@@ -133,46 +133,6 @@ class SamService:
 
         self.delegate.emit_status_update(f"Running SAM on box {box}...")
 
-    def on_brush_drawn(self, brush_mask: np.ndarray) -> None:
-        """Handle brush drawing for SAM segmentation"""
-        if self.delegate.get_frame_count() == 0:
-            return
-
-        # Check if SAM worker is available
-        if self.sam_worker is None:
-            self.delegate.show_warning("SAM Error", "SAM worker not initialized")
-            return
-
-        if self.sam_worker.isRunning():
-            return  # Worker is busy
-
-        # Ensure current frame is loaded in SAM (one-time per frame)
-        if not self._ensure_frame_loaded():
-            self.delegate.show_warning("SAM Error", "Failed to load current frame")
-            return
-
-        # Debug: Check brush mask properties
-        brush_pixels = np.sum(brush_mask > 0)
-        total_pixels = brush_mask.shape[0] * brush_mask.shape[1]
-        print(f"Brush mask shape: {brush_mask.shape}, non-zero pixels: {brush_pixels}")
-
-        try:
-            # Predict with already loaded image and brush mask
-            mask, score = self.sam_worker.predict_mask(brush_mask)
-
-            mask_pixels = np.sum(mask > 0) if mask is not None else 0
-            coverage_percent = (mask_pixels / total_pixels) * 100 if total_pixels > 0 else 0
-            print(f"SAM returned mask with shape: {mask.shape}, score: {score:.4f}")
-            print(f"Resulting mask has {mask_pixels} pixels ({coverage_percent:.1f}% coverage)")
-
-            # Emit the result directly
-            self.on_sam_complete(mask, score)
-
-        except Exception as e:
-            self.on_sam_error(f"SAM mask prediction failed: {str(e)}")
-
-        self.delegate.emit_status_update("Running SAM on brush input...")
-
     def on_sam_complete(self, mask: np.ndarray, score: float) -> None:
         """Handle SAM completion"""
         # Add mask to current frame

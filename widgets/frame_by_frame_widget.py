@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -159,20 +160,11 @@ class FrameByFrameWidget(QWidget):
         self.mode_group.addButton(self.edit_id_radio)
         tools_layout.addWidget(self.edit_id_radio)
 
-        self.brush_radio = QRadioButton("Brush (6)")
-        self.brush_radio.toggled.connect(
-            lambda: self.annotation_service.set_annotation_mode(
-                self.curr_image_label, AnnotationMode.BRUSH_ADD
-            )
-        )
-        self.mode_group.addButton(self.brush_radio)
-        tools_layout.addWidget(self.brush_radio)
-
         tools_layout.addStretch()
 
         main_layout.addLayout(tools_layout)
 
-        # Additional controls row: Transparency and brush size
+        # Additional controls row: Transparency and cell ID toggle
         controls_layout = QHBoxLayout()
 
         # Mask transparency control
@@ -192,20 +184,11 @@ class FrameByFrameWidget(QWidget):
 
         controls_layout.addSpacing(20)
 
-        # Brush size control
-        brush_size_label = QLabel("Brush Size:")
-        controls_layout.addWidget(brush_size_label)
-
-        self.brush_size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brush_size_slider.setRange(5, 50)
-        self.brush_size_slider.setValue(10)  # Default size
-        self.brush_size_slider.setFixedWidth(100)
-        self.brush_size_slider.valueChanged.connect(self.on_brush_size_changed)
-        controls_layout.addWidget(self.brush_size_slider)
-
-        self.brush_size_value_label = QLabel("10px")
-        self.brush_size_value_label.setFixedWidth(35)
-        controls_layout.addWidget(self.brush_size_value_label)
+        # Cell ID toggle
+        self.show_cell_ids_checkbox = QCheckBox("Show Cell IDs")
+        self.show_cell_ids_checkbox.setChecked(True)  # Default to showing cell IDs
+        self.show_cell_ids_checkbox.toggled.connect(self.on_cell_id_toggle_changed)
+        controls_layout.addWidget(self.show_cell_ids_checkbox)
 
         controls_layout.addStretch()
 
@@ -249,7 +232,6 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label = InteractiveFrameWidget()
         self.curr_image_label.point_clicked.connect(self.sam_service.on_point_clicked)
         self.curr_image_label.box_drawn.connect(self.sam_service.on_box_drawn)
-        self.curr_image_label.brush_drawn.connect(self.sam_service.on_brush_drawn)
         self.curr_image_label.mask_clicked.connect(
             self.annotation_service.on_mask_clicked
         )
@@ -283,7 +265,6 @@ class FrameByFrameWidget(QWidget):
         QShortcut(QKeySequence("3"), self, lambda: self.box_radio.setChecked(True))
         QShortcut(QKeySequence("4"), self, lambda: self.remove_radio.setChecked(True))
         QShortcut(QKeySequence("5"), self, lambda: self.edit_id_radio.setChecked(True))
-        QShortcut(QKeySequence("6"), self, lambda: self.brush_radio.setChecked(True))
 
         # View controls
         QShortcut(QKeySequence("R"), self, lambda: self.curr_image_label.reset_view())
@@ -299,10 +280,10 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label.set_mask_transparency(transparency)
         self.prev_image_label.set_mask_transparency(transparency)
 
-    def on_brush_size_changed(self, value):
-        """Handle brush size slider change"""
-        self.brush_size_value_label.setText(f"{value}px")
-        self.curr_image_label.set_brush_size(value)
+    def on_cell_id_toggle_changed(self, checked):
+        """Handle cell ID toggle change"""
+        self.curr_image_label.set_show_cell_ids(checked)
+        self.prev_image_label.set_show_cell_ids(checked)
 
     # ------------------------------------------------------------------------ #
     # ---------------------------- Initialization ---------------------------- #
@@ -331,21 +312,17 @@ class FrameByFrameWidget(QWidget):
         if self._models_initialized:
             return
 
-        try:
-            # Initialize SAM worker
-            if self.sam_service.sam_worker is None:
-                raise RuntimeError("Failed to initialize SAM model")
+        # Initialize SAM worker
+        if self.sam_service.sam_worker is None:
+            raise RuntimeError("Failed to initialize SAM model")
 
-            self.status_update.emit("Loading CUTIE model...")
-            # Initialize CUTIE worker
-            if self.cutie_service.cutie_worker is None:
-                raise RuntimeError("Failed to initialize CUTIE model")
+        self.status_update.emit("Loading CUTIE model...")
+        # Initialize CUTIE worker
+        if self.cutie_service.cutie_worker is None:
+            raise RuntimeError("Failed to initialize CUTIE model")
 
-            self._models_initialized = True
-            self.status_update.emit("CUTIE model loaded successfully")
-
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize models: {str(e)}")
+        self._models_initialized = True
+        self.status_update.emit("CUTIE model loaded successfully")
 
     # ------------------------------------------------------------------------ #
     # -------------------------------- Display ------------------------------- #
