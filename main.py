@@ -6,6 +6,8 @@ This script launches the new CellSeek frame-by-frame GUI application for cell se
 """
 
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from PyQt6.QtGui import QIcon
@@ -15,6 +17,70 @@ from main_window import MainWindow
 
 __version__ = "1.0.0"
 __author__ = "CellSeek Team"
+
+
+def check_and_download_weights():
+    """Check if weight files exist and download them if missing"""
+    current_dir = Path(__file__).parent
+    weights_dir = current_dir / "weights"
+
+    # Ensure weights directory exists
+    weights_dir.mkdir(exist_ok=True)
+
+    # Define required weight files and their download URLs
+    weight_files = {
+        "cpsam": "https://huggingface.co/LogicNg/cellseek/resolve/main/cpsam",
+        "cutie-base-mega.pth": "https://huggingface.co/LogicNg/cellseek/resolve/main/cutie-base-mega.pth",
+        "sam_vit_h_4b8939.pth": "https://huggingface.co/LogicNg/cellseek/resolve/main/sam_vit_h_4b8939.pth",
+    }
+
+    missing_files = []
+
+    # Check which files are missing
+    for filename in weight_files.keys():
+        file_path = weights_dir / filename
+        if not file_path.exists():
+            missing_files.append(filename)
+
+    if not missing_files:
+        print("All weight files are available.")
+        return True
+
+    print(f"Missing weight files: {', '.join(missing_files)}")
+    print("Downloading missing weight files...")
+
+    # Download missing files
+    for filename in missing_files:
+        url = weight_files[filename]
+        file_path = weights_dir / filename
+
+        try:
+            print(f"Downloading {filename}...")
+
+            def show_progress(block_num, block_size, total_size):
+                if total_size > 0:
+                    downloaded = block_num * block_size
+                    percent = min(100, (downloaded * 100) // total_size)
+                    downloaded_mb = downloaded / (1024 * 1024)
+                    total_mb = total_size / (1024 * 1024)
+                    print(
+                        f"\r{filename}: {percent}% ({downloaded_mb:.1f}/{total_mb:.1f} MB)",
+                        end="",
+                        flush=True,
+                    )
+
+            urllib.request.urlretrieve(url, file_path, reporthook=show_progress)
+            print(f"\n✓ {filename} downloaded successfully")
+
+        except urllib.error.URLError as e:
+            print(f"\n✗ Failed to download {filename}: {e}")
+            return False
+        except Exception as e:
+            print(f"\n✗ Error downloading {filename}: {e}")
+            return False
+
+    print("All weight files are now available.")
+    return True
 
 
 class CellSeekApp(QApplication):
@@ -209,6 +275,13 @@ class CellSeekApp(QApplication):
 def main():
     """Main entry point for the CellSeek GUI application"""
     try:
+        # Check and download weight files before starting GUI
+        print("Checking weight files...")
+        if not check_and_download_weights():
+            print("Failed to download required weight files. Exiting.")
+            sys.exit(1)
+
+        print("Starting CellSeek GUI...")
         app = CellSeekApp(sys.argv)
         sys.exit(app.exec())
 
