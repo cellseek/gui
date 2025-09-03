@@ -1,0 +1,13 @@
+# Core GUI and Application Dependencies
+PyQt6
+numpy
+opencv-python
+psutil
+
+# Machine Learning and Computer Vision
+torch
+segment-anything
+natsort
+
+git+https://github.com/cellseek/cellsam
+git+https://github.com/cellseek/cutie
