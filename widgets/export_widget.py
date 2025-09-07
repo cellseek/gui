@@ -139,6 +139,40 @@ class ExportWidget(QWidget):
     def setup_tabs(self, parent_layout):
         """Setup tabbed interface"""
         self.tab_widget = QTabWidget()
+
+        # Style the tab widget to show selected state
+        self.tab_widget.setStyleSheet(
+            """
+            QTabWidget::pane {
+                border: 1px solid #555555;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background: #404040;
+                color: #ffffff;
+                border: 1px solid #555555;
+                padding: 8px 16px;
+                margin-right: 2px;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                min-width: 120px;
+            }
+            QTabBar::tab:selected {
+                background: #007acc;
+                color: white;
+                font-weight: bold;
+                border-bottom: 2px solid #007acc;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #505050;
+            }
+            """
+        )
+
+        # Connect to tab change signal
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
+
         parent_layout.addWidget(self.tab_widget)
 
         # Configuration Tab
@@ -422,6 +456,16 @@ class ExportWidget(QWidget):
         """Handle time per frame change"""
         self.export_service.set_time_per_frame(value)
 
+    def on_tab_changed(self, index):
+        """Handle tab selection change"""
+        # Update status to reflect current tab (only if status_label exists)
+        if hasattr(self, "status_label"):
+            tab_names = ["Configuration", "Data Preview"]
+            if 0 <= index < len(tab_names):
+                self.status_label.setText(
+                    f"Ready to export - {tab_names[index]} tab selected"
+                )
+
     def browse_output_directory(self):
         """Browse for output directory"""
         directory = QFileDialog.getExistingDirectory(
@@ -569,12 +613,13 @@ class ExportWidget(QWidget):
         self.export_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
 
+        # Update status instead of showing popup
         if success:
-            QMessageBox.information(self, "Export Complete", message)
+            self.status_label.setText("Export completed successfully")
         else:
+            self.status_label.setText(f"Export failed: {message}")
+            # Only show popup for errors, not success
             QMessageBox.warning(self, "Export Error", message)
-
-        self.status_label.setText("Ready to export")
 
     def refresh_preview(self):
         """Refresh the data preview"""

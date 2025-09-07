@@ -425,52 +425,106 @@ class ExportService(QObject):
             return False
 
     def draw_cell_annotations(self, frame: np.ndarray, masks: np.ndarray) -> np.ndarray:
-        """Draw cell annotations on frame."""
+        """Draw cell annotations on frame using the same style as interactive frame widget."""
         annotated_frame = frame.copy()
 
         # Get unique cell IDs
         unique_ids = np.unique(masks)
         cell_ids = [id_val for id_val in unique_ids if id_val > 0]
 
-        # Color map for different cells
-        colors = [
-            (0, 255, 0),  # Green
-            (255, 0, 0),  # Blue
-            (0, 0, 255),  # Red
-            (255, 255, 0),  # Cyan
-            (255, 0, 255),  # Magenta
-            (0, 255, 255),  # Yellow
-        ]
+        if not cell_ids:
+            return annotated_frame
+
+        # Generate colors using the same method as interactive frame widget
+        colors = self._generate_colors(len(cell_ids))
+
+        # Create overlay with transparency (30% opacity like default in frame widget)
+        overlay = annotated_frame.copy()
+        alpha = 0.3  # Same default transparency as frame widget
 
         for i, cell_id in enumerate(cell_ids):
-            color = colors[i % len(colors)]
-
-            # Create binary mask for this cell
-            cell_mask = (masks == cell_id).astype(np.uint8)
-
-            # Find contours
-            contours, _ = cv2.findContours(
-                cell_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-
-            if contours:
-                # Draw contour
-                cv2.drawContours(annotated_frame, contours, -1, color, 2)
-
-                # Draw cell ID at centroid
-                largest_contour = max(contours, key=cv2.contourArea)
-                cx, cy = self.calculate_mask_centroid(largest_contour)
-                cv2.putText(
-                    annotated_frame,
-                    str(cell_id),
-                    (int(cx), int(cy)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    color,
-                    2,
+            mask = masks == cell_id
+            if np.any(mask):
+                color = np.array(colors[i], dtype=np.uint8)
+                # Apply the mask with transparency
+                overlay[mask] = ((1 - alpha) * overlay[mask] + alpha * color).astype(
+                    np.uint8
                 )
 
-        return annotated_frame
+        # Add cell ID text
+        overlay = self._add_cell_id_text(overlay, masks, cell_ids)
+
+        return overlay
+
+    def _generate_colors(self, num_colors: int) -> List[Tuple[int, int, int]]:
+        """Generate distinct colors for masks using same method as interactive frame widget"""
+        colors = []
+        for i in range(num_colors):
+            hue = (i * 137.508) % 360  # Golden angle approximation
+            # Convert HSV to RGB (simplified)
+            c = 1.0
+            x = c * (1 - abs((hue / 60) % 2 - 1))
+            m = 0
+
+            if 0 <= hue < 60:
+                r, g, b = c, x, 0
+            elif 60 <= hue < 120:
+                r, g, b = x, c, 0
+            elif 120 <= hue < 180:
+                r, g, b = 0, c, x
+            elif 180 <= hue < 240:
+                r, g, b = 0, x, c
+            elif 240 <= hue < 300:
+                r, g, b = x, 0, c
+            else:
+                r, g, b = c, 0, x
+
+            colors.append((int((r + m) * 255), int((g + m) * 255), int((b + m) * 255)))
+
+        return colors
+
+    def _add_cell_id_text(
+        self, overlay: np.ndarray, masks: np.ndarray, cell_ids: List[int]
+    ) -> np.ndarray:
+        """Add cell ID text to the overlay using same style as interactive frame widget"""
+        for cell_id in cell_ids:
+            mask = masks == cell_id
+            if np.any(mask):
+                # Find centroid of the mask
+                y_coords, x_coords = np.where(mask)
+                if len(y_coords) > 0:
+                    center_y = int(np.mean(y_coords))
+                    center_x = int(np.mean(x_coords))
+
+                    # White text with black outline for better visibility
+                    text_color = (255, 255, 255)  # White text
+                    outline_color = (0, 0, 0)  # Black outline
+
+                    # Add black outline
+                    cv2.putText(
+                        overlay,
+                        str(cell_id),
+                        (center_x - 10, center_y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        outline_color,
+                        3,  # Thicker for outline
+                        cv2.LINE_AA,
+                    )
+
+                    # Add white text on top
+                    cv2.putText(
+                        overlay,
+                        str(cell_id),
+                        (center_x - 10, center_y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        text_color,
+                        2,
+                        cv2.LINE_AA,
+                    )
+
+        return overlay
 
     def export_individual_frames(
         self, output_dir: str, frame_range: Optional[Tuple[int, int]] = None
