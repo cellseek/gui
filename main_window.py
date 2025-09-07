@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
         # Frame-by-frame connections
         self.frame_by_frame_widget.status_update.connect(self.on_status_update)
         self.frame_by_frame_widget.export_requested.connect(self.show_export_view)
+        self.frame_by_frame_widget.restart_requested.connect(self.on_restart_requested)
 
         # Export widget connections
         self.export_widget.back_to_tracking.connect(self.on_back_to_tracking)
@@ -223,6 +224,11 @@ class MainWindow(QMainWindow):
     def on_back_to_tracking(self):
         """Handle back to tracking navigation"""
         self.stacked_widget.setCurrentIndex(1)
+
+    def on_restart_requested(self):
+        """Handle restart navigation - go back to media import"""
+        self.stacked_widget.setCurrentIndex(0)
+        self.status_label.setText("Ready - Import video or images to begin")
 
     def show_export_view(self):
         """Show the export view"""

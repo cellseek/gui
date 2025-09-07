@@ -4,7 +4,7 @@ Export widget for cell tracking data export and analysis.
 This widget provides a comprehensive interface for:
 - Configuring export parameters
 - Previewing export data
-- Exporting to multiple formats (CSV, JSON, video, images)
+- Exporting to multiple formats (CSV, video, images)
 - Viewing summary statistics
 """
 
@@ -56,8 +56,6 @@ class ExportWorker(QThread):
         """Execute the export operation"""
         if self.operation == "csv":
             self.export_service.export_to_csv(**self.kwargs)
-        elif self.operation == "json":
-            self.export_service.export_to_json(**self.kwargs)
         elif self.operation == "video":
             self.export_service.export_annotated_video(**self.kwargs)
         elif self.operation == "frames":
@@ -113,7 +111,26 @@ class ExportWidget(QWidget):
         header_layout.addStretch()
 
         # Back button
-        self.back_button = QPushButton("← Back to Tracking")
+        self.back_button = QPushButton("Back to Tracking")
+        self.back_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-weight: bold;
+                border-radius: 4px;
+                min-width: 120px;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+            QPushButton:pressed {
+                background-color: #495057;
+            }
+        """
+        )
         self.back_button.clicked.connect(self.back_to_tracking.emit)
         header_layout.addWidget(self.back_button)
 
@@ -129,9 +146,6 @@ class ExportWidget(QWidget):
 
         # Preview Tab
         self.setup_preview_tab()
-
-        # Statistics Tab
-        self.setup_statistics_tab()
 
     def setup_config_tab(self):
         """Setup export configuration tab"""
@@ -200,9 +214,6 @@ class ExportWidget(QWidget):
         self.export_csv_check.setChecked(True)
         format_layout.addWidget(self.export_csv_check)
 
-        self.export_json_check = QCheckBox("JSON Data File")
-        format_layout.addWidget(self.export_json_check)
-
         self.export_video_check = QCheckBox("Annotated Video")
         format_layout.addWidget(self.export_video_check)
 
@@ -229,6 +240,25 @@ class ExportWidget(QWidget):
         dir_layout.addWidget(self.output_dir_edit)
 
         self.browse_dir_button = QPushButton("Browse...")
+        self.browse_dir_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #17a2b8;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                font-weight: bold;
+                border-radius: 4px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #138496;
+            }
+            QPushButton:pressed {
+                background-color: #117a8b;
+            }
+        """
+        )
         self.browse_dir_button.clicked.connect(self.browse_output_directory)
         dir_layout.addWidget(self.browse_dir_button)
 
@@ -264,16 +294,20 @@ class ExportWidget(QWidget):
         self.export_button.setStyleSheet(
             """
             QPushButton {
-                background-color: #4CAF50;
+                background-color: #28a745;
                 color: white;
                 border: none;
                 padding: 12px;
                 font-size: 14px;
                 font-weight: bold;
                 border-radius: 6px;
+                min-width: 120px;
             }
             QPushButton:hover {
-                background-color: #45a049;
+                background-color: #218838;
+            }
+            QPushButton:pressed {
+                background-color: #1e7e34;
             }
             QPushButton:disabled {
                 background-color: #cccccc;
@@ -285,6 +319,30 @@ class ExportWidget(QWidget):
         buttons_layout.addWidget(self.export_button)
 
         self.cancel_button = QPushButton("Cancel Export")
+        self.cancel_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                padding: 12px;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 6px;
+                min-width: 120px;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """
+        )
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_export)
         buttons_layout.addWidget(self.cancel_button)
@@ -301,10 +359,6 @@ class ExportWidget(QWidget):
 
         # Preview controls
         controls_layout = QHBoxLayout()
-
-        refresh_button = QPushButton("Refresh Preview")
-        refresh_button.clicked.connect(self.refresh_preview)
-        controls_layout.addWidget(refresh_button)
 
         controls_layout.addStretch()
 
@@ -323,24 +377,6 @@ class ExportWidget(QWidget):
         layout.addWidget(self.preview_table)
 
         self.tab_widget.addTab(preview_widget, "Data Preview")
-
-    def setup_statistics_tab(self):
-        """Setup statistics summary tab"""
-        stats_widget = QWidget()
-        layout = QVBoxLayout(stats_widget)
-
-        # Refresh button
-        refresh_stats_button = QPushButton("Refresh Statistics")
-        refresh_stats_button.clicked.connect(self.refresh_statistics)
-        layout.addWidget(refresh_stats_button)
-
-        # Statistics display
-        self.stats_text = QTextEdit()
-        self.stats_text.setReadOnly(True)
-        self.stats_text.setFont(QFont("Consolas", 10))
-        layout.addWidget(self.stats_text)
-
-        self.tab_widget.addTab(stats_widget, "Statistics")
 
     def setup_progress_panel(self, parent_layout):
         """Setup progress and status panel"""
@@ -434,7 +470,6 @@ class ExportWidget(QWidget):
         if not any(
             [
                 self.export_csv_check.isChecked(),
-                self.export_json_check.isChecked(),
                 self.export_video_check.isChecked(),
                 self.export_frames_check.isChecked(),
             ]
@@ -493,18 +528,6 @@ class ExportWidget(QWidget):
                 self.export_service,
                 "csv",
                 output_path=csv_path,
-                frame_range=frame_range,
-            )
-            self.export_worker.start()
-            self.export_worker.wait()
-
-        # Export JSON
-        if self.export_json_check.isChecked():
-            json_path = os.path.join(export_dir, f"{filename_prefix}.json")
-            self.export_worker = ExportWorker(
-                self.export_service,
-                "json",
-                output_path=json_path,
                 frame_range=frame_range,
             )
             self.export_worker.start()
@@ -591,42 +614,6 @@ class ExportWidget(QWidget):
             # Resize columns
             self.preview_table.resizeColumnsToContents()
 
-    def refresh_statistics(self):
-        """Refresh statistics display"""
-        try:
-            stats = self.export_service.get_summary_statistics()
-
-            if not stats:
-                self.stats_text.setText("No tracking data available for statistics.")
-                return
-
-            # Format statistics
-            stats_text = "CELL TRACKING STATISTICS\n"
-            stats_text += "=" * 50 + "\n\n"
-
-            stats_text += f"Total Detections: {stats['total_detections']}\n"
-            stats_text += f"Unique Cells: {stats['unique_cells']}\n"
-            stats_text += (
-                f"Frame Range: {stats['frame_range'][0]} - {stats['frame_range'][1]}\n"
-            )
-            stats_text += f"Time Span: {stats['time_span_minutes']:.1f} minutes\n\n"
-
-            # Morphological statistics
-            stats_text += "MORPHOLOGICAL STATISTICS\n"
-            stats_text += "-" * 30 + "\n"
-
-            for metric, data in stats["morphological_stats"].items():
-                stats_text += f"\n{metric.replace('_', ' ').title()}:\n"
-                stats_text += f"  Mean: {data['mean']:.3f}\n"
-                stats_text += f"  Std:  {data['std']:.3f}\n"
-                stats_text += f"  Min:  {data['min']:.3f}\n"
-                stats_text += f"  Max:  {data['max']:.3f}\n"
-
-            self.stats_text.setText(stats_text)
-
-        except Exception as e:
-            self.stats_text.setText(f"Error calculating statistics: {str(e)}")
-
     # ========================================
     # PUBLIC METHODS
     # ========================================
@@ -645,6 +632,5 @@ class ExportWidget(QWidget):
             default_dir = os.path.join(os.path.expanduser("~"), "CellSeek_Exports")
             self.output_dir_edit.setText(default_dir)
 
-        # Refresh preview and statistics
+        # Refresh preview
         self.refresh_preview()
-        self.refresh_statistics()

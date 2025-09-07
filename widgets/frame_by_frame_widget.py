@@ -38,6 +38,7 @@ class FrameByFrameWidget(QWidget):
     # Signals
     status_update = pyqtSignal(str)
     export_requested = pyqtSignal()
+    restart_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -96,36 +97,112 @@ class FrameByFrameWidget(QWidget):
         nav_layout.addStretch()
 
         # Navigation buttons
-        self.prev_button = QPushButton("◀ Previous (A)")
+        self.prev_button = QPushButton("Previous (A)")
+        self.prev_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                font-weight: bold;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """
+        )
         self.prev_button.clicked.connect(self.previous_frame)
         self.prev_button.setEnabled(False)
         nav_layout.addWidget(self.prev_button)
 
-        self.next_button = QPushButton("Next (D) ▶")
+        self.next_button = QPushButton("Next (D)")
+        self.next_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                font-weight: bold;
+                border-radius: 4px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """
+        )
         self.next_button.clicked.connect(self.next_frame)
         self.next_button.setEnabled(False)
         nav_layout.addWidget(self.next_button)
 
         nav_layout.addSpacing(20)
 
-        # Export button
-        self.export_button = QPushButton("📊 Export Data")
-        self.export_button.setStyleSheet(
+        # Restart button
+        self.restart_button = QPushButton("Restart")
+        self.restart_button.setStyleSheet(
             """
             QPushButton {
-                background-color: #2196F3;
+                background-color: #6c757d;
                 color: white;
                 border: none;
                 padding: 8px 16px;
                 font-weight: bold;
                 border-radius: 4px;
+                min-width: 80px;
             }
             QPushButton:hover {
-                background-color: #1976D2;
+                background-color: #5a6268;
+            }
+            QPushButton:pressed {
+                background-color: #495057;
+            }
+        """
+        )
+        self.restart_button.clicked.connect(self.on_restart_requested)
+        self.restart_button.setVisible(False)  # Initially hidden
+        nav_layout.addWidget(self.restart_button)
+
+        # Export button
+        self.export_button = QPushButton("Export Data")
+        self.export_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-weight: bold;
+                border-radius: 4px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #218838;
+            }
+            QPushButton:pressed {
+                background-color: #1e7e34;
             }
         """
         )
         self.export_button.clicked.connect(self.on_export_requested)
+        self.export_button.setVisible(False)  # Initially hidden
         nav_layout.addWidget(self.export_button)
 
         main_layout.addLayout(nav_layout)
@@ -320,6 +397,10 @@ class FrameByFrameWidget(QWidget):
         """Handle export button click"""
         self.export_requested.emit()
 
+    def on_restart_requested(self):
+        """Handle restart button click"""
+        self.restart_requested.emit()
+
     # ------------------------------------------------------------------------ #
     # ---------------------------- Initialization ---------------------------- #
     # ------------------------------------------------------------------------ #
@@ -374,8 +455,18 @@ class FrameByFrameWidget(QWidget):
         self.frame_info_label.setText(f"Frame {current_index + 1} / {total_frames}")
 
         # Update navigation buttons
-        self.prev_button.setEnabled(self.storage_service.has_previous_frame())
-        self.next_button.setEnabled(self.storage_service.has_next_frame())
+        cutie_running = self.is_cutie_running()
+        self.prev_button.setEnabled(
+            self.storage_service.has_previous_frame() and not cutie_running
+        )
+        self.next_button.setEnabled(
+            self.storage_service.has_next_frame() and not cutie_running
+        )
+
+        # Update export button - only show when at last frame
+        self.export_button.setVisible(self.is_at_last_frame())
+        # Show restart button when frames are loaded (any frame)
+        self.restart_button.setVisible(total_frames > 0)
         # Note: auto_segment_button is hidden and not enabled for manual use
 
         # Update current frame display (right side - editable, no cell IDs for clarity)
@@ -401,6 +492,10 @@ class FrameByFrameWidget(QWidget):
 
     def previous_frame(self):
         """Go to previous frame"""
+        # Don't allow navigation when CUTIE is running
+        if self.is_cutie_running():
+            return
+
         if self.storage_service.has_previous_frame():
             current_index = self.storage_service.get_current_frame_index()
             self.storage_service.set_current_frame_index(current_index - 1)
@@ -408,6 +503,10 @@ class FrameByFrameWidget(QWidget):
 
     def next_frame(self):
         """Go to next frame and run tracking if needed"""
+        # Don't allow navigation when CUTIE is running
+        if self.is_cutie_running():
+            return
+
         if self.storage_service.has_next_frame():
             current_index = self.storage_service.get_current_frame_index()
             next_index = current_index + 1
@@ -534,3 +633,15 @@ class FrameByFrameWidget(QWidget):
     def show_warning(self, title: str, message: str) -> None:
         """Delegate for SAM service"""
         QMessageBox.warning(self, title, message)
+
+    def is_cutie_running(self) -> bool:
+        """Check if CUTIE tracking is currently running"""
+        if self.cutie_service.cutie_worker is None:
+            return False
+        return self.cutie_service.cutie_worker.isRunning()
+
+    def is_at_last_frame(self) -> bool:
+        """Check if we're currently at the last frame"""
+        current_index = self.storage_service.get_current_frame_index()
+        total_frames = self.storage_service.get_frame_count()
+        return current_index == total_frames - 1

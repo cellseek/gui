@@ -52,16 +52,20 @@ class DropZoneWidget(QWidget):
         self.upload_button.setStyleSheet(
             """
             QPushButton {
-                background-color: #0078d4;
+                background-color: #007bff;
                 color: white;
                 border: none;
                 padding: 12px 32px;
                 border-radius: 6px;
                 font-weight: bold;
                 font-size: 14px;
+                min-width: 120px;
             }
             QPushButton:hover {
-                background-color: #106ebe;
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
             }
         """
         )
