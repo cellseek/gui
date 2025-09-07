@@ -37,6 +37,7 @@ class FrameByFrameWidget(QWidget):
 
     # Signals
     status_update = pyqtSignal(str)
+    export_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -50,9 +51,13 @@ class FrameByFrameWidget(QWidget):
         # Models will be initialized later via initialize_models()
         self._models_initialized = False
 
+        # Track pending async operations
+        self._pending_frame_index = None
+
         # Setup UI
         self.setup_ui()
         self.setup_shortcuts()
+        self.setup_async_connections()
 
     # ------------------------------------------------------------------------ #
     # ------------------------------- UI setup ------------------------------- #
@@ -100,6 +105,28 @@ class FrameByFrameWidget(QWidget):
         self.next_button.clicked.connect(self.next_frame)
         self.next_button.setEnabled(False)
         nav_layout.addWidget(self.next_button)
+
+        nav_layout.addSpacing(20)
+
+        # Export button
+        self.export_button = QPushButton("📊 Export Data")
+        self.export_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-weight: bold;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """
+        )
+        self.export_button.clicked.connect(self.on_export_requested)
+        nav_layout.addWidget(self.export_button)
 
         main_layout.addLayout(nav_layout)
 
@@ -255,19 +282,23 @@ class FrameByFrameWidget(QWidget):
 
     def setup_shortcuts(self):
         """Setup keyboard shortcuts"""
-        # Navigation
-        QShortcut(QKeySequence("A"), self, self.previous_frame)
-        QShortcut(QKeySequence("D"), self, self.next_frame)
+        # Frame navigation shortcuts
+        self.prev_shortcut = QShortcut(QKeySequence("A"), self)
+        self.prev_shortcut.activated.connect(self.previous_frame)
 
-        # Tools
-        QShortcut(QKeySequence("1"), self, lambda: self.view_radio.setChecked(True))
-        QShortcut(QKeySequence("2"), self, lambda: self.click_radio.setChecked(True))
-        QShortcut(QKeySequence("3"), self, lambda: self.box_radio.setChecked(True))
-        QShortcut(QKeySequence("4"), self, lambda: self.remove_radio.setChecked(True))
-        QShortcut(QKeySequence("5"), self, lambda: self.edit_id_radio.setChecked(True))
+        self.next_shortcut = QShortcut(QKeySequence("D"), self)
+        self.next_shortcut.activated.connect(self.next_frame)
 
-        # View controls
-        QShortcut(QKeySequence("R"), self, lambda: self.curr_image_label.reset_view())
+        # Toggle between SAM and Track modes
+        self.mode_shortcut = QShortcut(QKeySequence("Tab"), self)
+        self.mode_shortcut.activated.connect(self.toggle_annotation_mode)
+
+    def setup_async_connections(self):
+        """Setup connections for async operations"""
+        # Connect CUTIE async signals
+        self.cutie_service.tracking_complete.connect(self._on_tracking_complete)
+        self.cutie_service.tracking_error.connect(self._on_tracking_error)
+        self.cutie_service.status_update.connect(self.status_update.emit)
 
     # ------------------------------------------------------------------------ #
     # ------------------------------- Callbacks ------------------------------ #
@@ -284,6 +315,10 @@ class FrameByFrameWidget(QWidget):
         """Handle cell ID toggle change"""
         self.curr_image_label.set_show_cell_ids(checked)
         self.prev_image_label.set_show_cell_ids(checked)
+
+    def on_export_requested(self):
+        """Handle export button click"""
+        self.export_requested.emit()
 
     # ------------------------------------------------------------------------ #
     # ---------------------------- Initialization ---------------------------- #
@@ -383,37 +418,61 @@ class FrameByFrameWidget(QWidget):
                 and next_index > 0
                 and self.storage_service.has_mask_for_frame(current_index)
             ):
+                # Store the target frame index for when tracking completes
+                self._pending_frame_index = next_index
+
                 # Get data for tracking
                 previous_image = self.storage_service.get_frame(current_index)
                 previous_mask = self.storage_service.get_mask_for_frame(current_index)
                 current_image = self.storage_service.get_frame(next_index)
 
-                # Run CUTIE tracking
-                predicted_mask = self.cutie_service.track(
+                # Run CUTIE tracking asynchronously
+                self.cutie_service.track_async(
                     previous_image, previous_mask, current_image
                 )
-
-                if predicted_mask is not None:
-                    # Store the predicted mask and move to next frame
-                    self.storage_service.set_mask_for_frame(
-                        next_index, predicted_mask.astype(np.uint16)
-                    )
-                    self.storage_service.set_current_frame_index(next_index)
-                    self.update_display()
-                    self.status_update.emit(
-                        f"Frame {next_index + 1} tracked successfully"
-                    )
-                else:
-                    # Tracking failed, show error but still allow navigation
-                    self.show_warning(
-                        "Tracking Error", "CUTIE tracking failed for this frame"
-                    )
-                    self.storage_service.set_current_frame_index(next_index)
-                    self.update_display()
             else:
                 # Just move to next frame (already has mask or is first frame)
                 self.storage_service.set_current_frame_index(next_index)
                 self.update_display()
+
+    def _on_tracking_complete(self, predicted_mask: np.ndarray):
+        """Handle successful tracking completion"""
+        if self._pending_frame_index is not None:
+            # Store the predicted mask and move to next frame
+            self.storage_service.set_mask_for_frame(
+                self._pending_frame_index, predicted_mask.astype(np.uint16)
+            )
+            self.storage_service.set_current_frame_index(self._pending_frame_index)
+            self.update_display()
+            self.status_update.emit(
+                f"Frame {self._pending_frame_index + 1} tracked successfully"
+            )
+            self._pending_frame_index = None
+
+    def _on_tracking_error(self, error_message: str):
+        """Handle tracking error"""
+        if self._pending_frame_index is not None:
+            # Tracking failed, show error but still allow navigation
+            self.show_warning(
+                "Tracking Error", f"CUTIE tracking failed: {error_message}"
+            )
+            self.storage_service.set_current_frame_index(self._pending_frame_index)
+            self.update_display()
+            self._pending_frame_index = None
+
+    def toggle_annotation_mode(self):
+        """Toggle between annotation modes using Tab key"""
+        # Get current checked radio button
+        if self.view_radio.isChecked():
+            self.click_radio.setChecked(True)
+        elif self.click_radio.isChecked():
+            self.box_radio.setChecked(True)
+        elif self.box_radio.isChecked():
+            self.remove_radio.setChecked(True)
+        elif self.remove_radio.isChecked():
+            self.edit_id_radio.setChecked(True)
+        elif self.edit_id_radio.isChecked():
+            self.view_radio.setChecked(True)
 
     # ------------------------------------------------------------------------ #
     # --------------------------- Delegate Methods --------------------------- #

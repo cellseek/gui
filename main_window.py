@@ -79,6 +79,12 @@ class MainWindow(QMainWindow):
         self.frame_by_frame_widget = FrameByFrameWidget()
         self.stacked_widget.addWidget(self.frame_by_frame_widget)
 
+        # Screen 3: Export Processing
+        from widgets.export_widget import ExportWidget
+
+        self.export_widget = ExportWidget(self.frame_by_frame_widget.storage_service)
+        self.stacked_widget.addWidget(self.export_widget)
+
     def setup_status_bar(self):
         """Setup the status bar"""
         self.status_bar = QStatusBar()
@@ -105,6 +111,15 @@ class MainWindow(QMainWindow):
 
         # Frame-by-frame connections
         self.frame_by_frame_widget.status_update.connect(self.on_status_update)
+        self.frame_by_frame_widget.export_requested.connect(self.show_export_view)
+
+        # Export widget connections
+        self.export_widget.back_to_tracking.connect(self.on_back_to_tracking)
+
+        # CellSAM async connections
+        self.cellsam_service.segmentation_complete.connect(self._on_cellsam_complete)
+        self.cellsam_service.segmentation_error.connect(self._on_cellsam_error)
+        self.cellsam_service.status_update.connect(self.on_status_update)
 
     # ------------------------------------------------------------------------ #
     # ----------------------------- UI Management ---------------------------- #
@@ -157,31 +172,59 @@ class MainWindow(QMainWindow):
             # Fallback to original path if preprocessing failed
             first_frame_processed_path = frame_paths[0]
 
-        # Run CellSAM on the processed first frame
-        first_frame_masks = self.cellsam_service.segment_first_frame(
-            first_frame_processed_path
-        )
+        # Store frame paths for later use
+        self._pending_frame_paths = frame_paths
 
-        if first_frame_masks is not None:
+        # Run CellSAM on the processed first frame asynchronously
+        self.cellsam_service.segment_first_frame_async(first_frame_processed_path)
+
+    def _on_cellsam_complete(self, first_frame_masks: np.ndarray):
+        """Handle successful CellSAM completion"""
+        if hasattr(self, "_pending_frame_paths"):
             # Initialize with CellSAM results
             # Note: masks are kept at processed size to match displayed images
-            self.frame_by_frame_widget.initialize(frame_paths, first_frame_masks)
+            self.frame_by_frame_widget.initialize(
+                self._pending_frame_paths, first_frame_masks
+            )
             self.status_label.setText("Frames loaded with CellSAM segmentation")
-        else:
+
+            # Switch to frame-by-frame view
+            self.stacked_widget.setCurrentIndex(1)
+
+            # Initialize models
+            self.frame_by_frame_widget.initialize_models()
+
+            # Clean up
+            delattr(self, "_pending_frame_paths")
+
+    def _on_cellsam_error(self, error_message: str):
+        """Handle CellSAM error"""
+        if hasattr(self, "_pending_frame_paths"):
             # CellSAM failed, show error but still allow manual annotation
             self.show_error(
                 "CellSAM Error",
-                "Failed to segment first frame. You can manually annotate the first frame.",
+                f"Failed to segment first frame: {error_message}. You can manually annotate the first frame.",
             )
             # Create a dummy mask for initialization
             dummy_mask = np.zeros(
                 (512, 512), dtype=np.uint16
             )  # Will be resized by initialize
-            self.frame_by_frame_widget.initialize(frame_paths, dummy_mask)
-            self.status_label.setText("Frames loaded - manual annotation required")
+            self.frame_by_frame_widget.initialize(self._pending_frame_paths, dummy_mask)
 
-        # Initialize models
-        self.frame_by_frame_widget.initialize_models()
+            # Switch to frame-by-frame view
+            self.stacked_widget.setCurrentIndex(1)
 
-        # Switch to frame-by-frame screen
+            # Initialize models
+            self.frame_by_frame_widget.initialize_models()
+
+            # Clean up
+            delattr(self, "_pending_frame_paths")
+
+    def on_back_to_tracking(self):
+        """Handle back to tracking navigation"""
         self.stacked_widget.setCurrentIndex(1)
+
+    def show_export_view(self):
+        """Show the export view"""
+        self.export_widget.initialize()
+        self.stacked_widget.setCurrentIndex(2)
