@@ -158,6 +158,145 @@ class ExportService(QObject):
         return cell_contours
 
     # ========================================
+    # CELL TRAJECTORY ANALYSIS
+    # ========================================
+
+    def calculate_cell_trajectories(self) -> Dict[int, Dict[str, Any]]:
+        """Calculate trajectory metrics for each cell across all frames."""
+        # Get all tracking data organized by cell
+        all_data = self.extract_all_tracking_data()
+
+        # Group data by cell_id
+        cell_data_by_id = {}
+        for row in all_data:
+            cell_id = row["cell_id"]
+            if cell_id not in cell_data_by_id:
+                cell_data_by_id[cell_id] = []
+            cell_data_by_id[cell_id].append(row)
+
+        # Sort each cell's data by frame_id
+        for cell_id in cell_data_by_id:
+            cell_data_by_id[cell_id].sort(key=lambda x: x["frame_id"])
+
+        # Calculate trajectory metrics for each cell
+        cell_trajectories = {}
+
+        for cell_id, cell_frames in cell_data_by_id.items():
+            if len(cell_frames) < 2:
+                # Can't calculate trajectory metrics with less than 2 points
+                cell_trajectories[cell_id] = {
+                    "total_distance": 0.0,
+                    "displacement": 0.0,
+                    "average_velocity": 0.0,
+                    "average_speed": 0.0,
+                    "max_speed": 0.0,
+                    "frame_count": len(cell_frames),
+                    "time_span_minutes": 0.0,
+                }
+                continue
+
+            # Calculate distances between consecutive frames
+            distances = []
+            speeds = []
+
+            for i in range(1, len(cell_frames)):
+                prev_frame = cell_frames[i - 1]
+                curr_frame = cell_frames[i]
+
+                # Calculate distance between consecutive positions
+                dx = curr_frame["x_px"] - prev_frame["x_px"]
+                dy = curr_frame["y_px"] - prev_frame["y_px"]
+                distance = math.sqrt(dx**2 + dy**2)
+                distances.append(distance)
+
+                # Calculate speed (distance per time)
+                time_diff = (
+                    curr_frame["frame_id"] - prev_frame["frame_id"]
+                ) * self.TIME_PER_FRAME
+                if time_diff > 0:
+                    speed = distance / time_diff  # pixels per minute
+                    speeds.append(speed)
+                else:
+                    speeds.append(0.0)
+
+            # Total distance traveled
+            total_distance = sum(distances)
+
+            # Displacement (straight-line distance from start to end)
+            start_pos = cell_frames[0]
+            end_pos = cell_frames[-1]
+            displacement = math.sqrt(
+                (end_pos["x_px"] - start_pos["x_px"]) ** 2
+                + (end_pos["y_px"] - start_pos["y_px"]) ** 2
+            )
+
+            # Time span
+            time_span = (
+                cell_frames[-1]["frame_id"] - cell_frames[0]["frame_id"]
+            ) * self.TIME_PER_FRAME
+
+            # Velocity (displacement per time)
+            average_velocity = displacement / time_span if time_span > 0 else 0.0
+
+            # Speed statistics
+            average_speed = np.mean(speeds) if speeds else 0.0
+            max_speed = np.max(speeds) if speeds else 0.0
+
+            cell_trajectories[cell_id] = {
+                "total_distance": total_distance,
+                "displacement": displacement,
+                "average_velocity": average_velocity,
+                "average_speed": average_speed,
+                "max_speed": max_speed,
+                "frame_count": len(cell_frames),
+                "time_span_minutes": time_span,
+            }
+
+        return cell_trajectories
+
+    def calculate_cell_morphological_averages(self) -> Dict[int, Dict[str, float]]:
+        """Calculate average morphological metrics for each cell."""
+        # Get all tracking data organized by cell
+        all_data = self.extract_all_tracking_data()
+
+        # Group data by cell_id
+        cell_data_by_id = {}
+        for row in all_data:
+            cell_id = row["cell_id"]
+            if cell_id not in cell_data_by_id:
+                cell_data_by_id[cell_id] = []
+            cell_data_by_id[cell_id].append(row)
+
+        # Calculate averages for each cell
+        cell_averages = {}
+
+        for cell_id, cell_frames in cell_data_by_id.items():
+            if not cell_frames:
+                continue
+
+            # Extract morphological metrics
+            areas = [frame["area_px2"] for frame in cell_frames]
+            perimeters = [frame["perimeter_px"] for frame in cell_frames]
+            circularities = [frame["circularity"] for frame in cell_frames]
+            aspect_ratios = [frame["ellipse_aspect_ratio"] for frame in cell_frames]
+            solidities = [frame["solidity"] for frame in cell_frames]
+
+            cell_averages[cell_id] = {
+                "average_area": np.mean(areas),
+                "average_perimeter": np.mean(perimeters),
+                "average_circularity": np.mean(circularities),
+                "average_ellipse_aspect_ratio": np.mean(aspect_ratios),
+                "average_solidity": np.mean(solidities),
+                "std_area": np.std(areas),
+                "std_perimeter": np.std(perimeters),
+                "std_circularity": np.std(circularities),
+                "std_ellipse_aspect_ratio": np.std(aspect_ratios),
+                "std_solidity": np.std(solidities),
+            }
+
+        return cell_averages
+
+    # ========================================
     # DATA EXTRACTION AND ANALYSIS
     # ========================================
 
@@ -341,6 +480,115 @@ class ExportService(QObject):
 
         except Exception as e:
             error_msg = f"Failed to export JSON: {str(e)}"
+            self.export_completed.emit(False, error_msg)
+            return False
+
+    def export_cell_summary_to_csv(
+        self, output_path: str, frame_range: Optional[Tuple[int, int]] = None
+    ) -> bool:
+        """Export per-cell summary statistics to CSV file."""
+        try:
+            self.status_updated.emit("Calculating cell trajectories...")
+
+            # Get trajectory data
+            cell_trajectories = self.calculate_cell_trajectories()
+
+            self.status_updated.emit("Calculating morphological averages...")
+            self.progress_updated.emit(25)
+
+            # Get morphological averages
+            cell_morphological_averages = self.calculate_cell_morphological_averages()
+
+            if not cell_trajectories and not cell_morphological_averages:
+                self.export_completed.emit(False, "No cell data found to export")
+                return False
+
+            # Combine trajectory and morphological data
+            all_cell_ids = set(cell_trajectories.keys()) | set(
+                cell_morphological_averages.keys()
+            )
+
+            self.status_updated.emit("Preparing summary data...")
+            self.progress_updated.emit(50)
+
+            summary_data = []
+            for cell_id in sorted(all_cell_ids):
+                # Get trajectory data (with defaults if missing)
+                trajectory = cell_trajectories.get(cell_id, {})
+                morphology = cell_morphological_averages.get(cell_id, {})
+
+                row_data = {
+                    "cell_id": cell_id,
+                    "total_distance_px": trajectory.get("total_distance", 0.0),
+                    "displacement_px": trajectory.get("displacement", 0.0),
+                    "average_velocity_px_per_min": trajectory.get(
+                        "average_velocity", 0.0
+                    ),
+                    "average_speed_px_per_min": trajectory.get("average_speed", 0.0),
+                    "max_speed_px_per_min": trajectory.get("max_speed", 0.0),
+                    "frame_count": trajectory.get("frame_count", 0),
+                    "time_span_minutes": trajectory.get("time_span_minutes", 0.0),
+                    "average_area_px2": morphology.get("average_area", 0.0),
+                    "average_perimeter_px": morphology.get("average_perimeter", 0.0),
+                    "average_circularity": morphology.get("average_circularity", 0.0),
+                    "average_ellipse_aspect_ratio": morphology.get(
+                        "average_ellipse_aspect_ratio", 0.0
+                    ),
+                    "average_solidity": morphology.get("average_solidity", 0.0),
+                    "std_area_px2": morphology.get("std_area", 0.0),
+                    "std_perimeter_px": morphology.get("std_perimeter", 0.0),
+                    "std_circularity": morphology.get("std_circularity", 0.0),
+                    "std_ellipse_aspect_ratio": morphology.get(
+                        "std_ellipse_aspect_ratio", 0.0
+                    ),
+                    "std_solidity": morphology.get("std_solidity", 0.0),
+                }
+
+                summary_data.append(row_data)
+
+            # Create output directory
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            # Write CSV file
+            self.status_updated.emit("Writing cell summary CSV file...")
+            self.progress_updated.emit(75)
+
+            with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
+                fieldnames = [
+                    "cell_id",
+                    "total_distance_px",
+                    "displacement_px",
+                    "average_velocity_px_per_min",
+                    "average_speed_px_per_min",
+                    "max_speed_px_per_min",
+                    "frame_count",
+                    "time_span_minutes",
+                    "average_area_px2",
+                    "average_perimeter_px",
+                    "average_circularity",
+                    "average_ellipse_aspect_ratio",
+                    "average_solidity",
+                    "std_area_px2",
+                    "std_perimeter_px",
+                    "std_circularity",
+                    "std_ellipse_aspect_ratio",
+                    "std_solidity",
+                ]
+
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for row in summary_data:
+                    writer.writerow(row)
+
+            self.progress_updated.emit(100)
+            self.export_completed.emit(
+                True, f"Cell summary exported successfully to {output_path}"
+            )
+            return True
+
+        except Exception as e:
+            error_msg = f"Failed to export cell summary: {str(e)}"
             self.export_completed.emit(False, error_msg)
             return False
 
@@ -620,6 +868,26 @@ class ExportService(QObject):
             areas = [d["area_px2"] for d in all_data]
             perimeters = [d["perimeter_px"] for d in all_data]
             circularities = [d["circularity"] for d in all_data]
+            aspect_ratios = [d["ellipse_aspect_ratio"] for d in all_data]
+            solidities = [d["solidity"] for d in all_data]
+
+            # Calculate trajectory statistics
+            cell_trajectories = self.calculate_cell_trajectories()
+            if cell_trajectories:
+                total_distances = [
+                    traj["total_distance"] for traj in cell_trajectories.values()
+                ]
+                displacements = [
+                    traj["displacement"] for traj in cell_trajectories.values()
+                ]
+                avg_velocities = [
+                    traj["average_velocity"] for traj in cell_trajectories.values()
+                ]
+                avg_speeds = [
+                    traj["average_speed"] for traj in cell_trajectories.values()
+                ]
+            else:
+                total_distances = displacements = avg_velocities = avg_speeds = []
 
             summary = {
                 "total_detections": total_detections,
@@ -646,6 +914,44 @@ class ExportService(QObject):
                         "min": np.min(circularities),
                         "max": np.max(circularities),
                     },
+                    "ellipse_aspect_ratio": {
+                        "mean": np.mean(aspect_ratios),
+                        "std": np.std(aspect_ratios),
+                        "min": np.min(aspect_ratios),
+                        "max": np.max(aspect_ratios),
+                    },
+                    "solidity": {
+                        "mean": np.mean(solidities),
+                        "std": np.std(solidities),
+                        "min": np.min(solidities),
+                        "max": np.max(solidities),
+                    },
+                },
+                "trajectory_stats": {
+                    "total_distance_px": {
+                        "mean": np.mean(total_distances) if total_distances else 0.0,
+                        "std": np.std(total_distances) if total_distances else 0.0,
+                        "min": np.min(total_distances) if total_distances else 0.0,
+                        "max": np.max(total_distances) if total_distances else 0.0,
+                    },
+                    "displacement_px": {
+                        "mean": np.mean(displacements) if displacements else 0.0,
+                        "std": np.std(displacements) if displacements else 0.0,
+                        "min": np.min(displacements) if displacements else 0.0,
+                        "max": np.max(displacements) if displacements else 0.0,
+                    },
+                    "average_velocity_px_per_min": {
+                        "mean": np.mean(avg_velocities) if avg_velocities else 0.0,
+                        "std": np.std(avg_velocities) if avg_velocities else 0.0,
+                        "min": np.min(avg_velocities) if avg_velocities else 0.0,
+                        "max": np.max(avg_velocities) if avg_velocities else 0.0,
+                    },
+                    "average_speed_px_per_min": {
+                        "mean": np.mean(avg_speeds) if avg_speeds else 0.0,
+                        "std": np.std(avg_speeds) if avg_speeds else 0.0,
+                        "min": np.min(avg_speeds) if avg_speeds else 0.0,
+                        "max": np.max(avg_speeds) if avg_speeds else 0.0,
+                    },
                 },
             }
 
@@ -653,4 +959,69 @@ class ExportService(QObject):
 
         except Exception as e:
             print(f"Error calculating summary statistics: {e}")
+            return {}
+
+    def get_detailed_cell_summary(self) -> Dict[str, Any]:
+        """Get detailed per-cell summary statistics for display in summary tab."""
+        try:
+            # Get trajectory data
+            cell_trajectories = self.calculate_cell_trajectories()
+
+            # Get morphological averages
+            cell_morphological_averages = self.calculate_cell_morphological_averages()
+
+            if not cell_trajectories and not cell_morphological_averages:
+                return {}
+
+            # Combine data
+            all_cell_ids = set(cell_trajectories.keys()) | set(
+                cell_morphological_averages.keys()
+            )
+
+            detailed_summary = {"cell_count": len(all_cell_ids), "cells": {}}
+
+            for cell_id in sorted(all_cell_ids):
+                trajectory = cell_trajectories.get(cell_id, {})
+                morphology = cell_morphological_averages.get(cell_id, {})
+
+                detailed_summary["cells"][cell_id] = {
+                    "trajectory": {
+                        "total_distance_px": trajectory.get("total_distance", 0.0),
+                        "displacement_px": trajectory.get("displacement", 0.0),
+                        "average_velocity_px_per_min": trajectory.get(
+                            "average_velocity", 0.0
+                        ),
+                        "average_speed_px_per_min": trajectory.get(
+                            "average_speed", 0.0
+                        ),
+                        "max_speed_px_per_min": trajectory.get("max_speed", 0.0),
+                        "frame_count": trajectory.get("frame_count", 0),
+                        "time_span_minutes": trajectory.get("time_span_minutes", 0.0),
+                    },
+                    "morphology": {
+                        "average_area_px2": morphology.get("average_area", 0.0),
+                        "average_perimeter_px": morphology.get(
+                            "average_perimeter", 0.0
+                        ),
+                        "average_circularity": morphology.get(
+                            "average_circularity", 0.0
+                        ),
+                        "average_ellipse_aspect_ratio": morphology.get(
+                            "average_ellipse_aspect_ratio", 0.0
+                        ),
+                        "average_solidity": morphology.get("average_solidity", 0.0),
+                        "std_area_px2": morphology.get("std_area", 0.0),
+                        "std_perimeter_px": morphology.get("std_perimeter", 0.0),
+                        "std_circularity": morphology.get("std_circularity", 0.0),
+                        "std_ellipse_aspect_ratio": morphology.get(
+                            "std_ellipse_aspect_ratio", 0.0
+                        ),
+                        "std_solidity": morphology.get("std_solidity", 0.0),
+                    },
+                }
+
+            return detailed_summary
+
+        except Exception as e:
+            print(f"Error calculating detailed cell summary: {e}")
             return {}

@@ -155,31 +155,6 @@ class FrameByFrameWidget(QWidget):
 
         nav_layout.addSpacing(20)
 
-        # Restart button
-        self.restart_button = QPushButton("Restart")
-        self.restart_button.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #6c757d;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                font-weight: bold;
-                border-radius: 4px;
-                min-width: 80px;
-            }
-            QPushButton:hover {
-                background-color: #5a6268;
-            }
-            QPushButton:pressed {
-                background-color: #495057;
-            }
-        """
-        )
-        self.restart_button.clicked.connect(self.on_restart_requested)
-        self.restart_button.setVisible(False)  # Initially hidden
-        nav_layout.addWidget(self.restart_button)
-
         # Export button
         self.export_button = QPushButton("Export Data")
         self.export_button.setStyleSheet(
@@ -204,6 +179,31 @@ class FrameByFrameWidget(QWidget):
         self.export_button.clicked.connect(self.on_export_requested)
         self.export_button.setVisible(False)  # Initially hidden
         nav_layout.addWidget(self.export_button)
+
+        # Restart button
+        self.restart_button = QPushButton("Restart")
+        self.restart_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                font-weight: bold;
+                border-radius: 4px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+            QPushButton:pressed {
+                background-color: #495057;
+            }
+        """
+        )
+        self.restart_button.clicked.connect(self.on_restart_requested)
+        self.restart_button.setVisible(False)  # Initially hidden
+        nav_layout.addWidget(self.restart_button)
 
         main_layout.addLayout(nav_layout)
 

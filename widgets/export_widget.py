@@ -9,7 +9,6 @@ This widget provides a comprehensive interface for:
 """
 
 import os
-from pathlib import Path
 from typing import Optional, Tuple
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -22,19 +21,16 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSlider,
     QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -180,6 +176,9 @@ class ExportWidget(QWidget):
 
         # Preview Tab
         self.setup_preview_tab()
+
+        # Summary Tab
+        self.setup_summary_tab()
 
     def setup_config_tab(self):
         """Setup export configuration tab"""
@@ -412,6 +411,30 @@ class ExportWidget(QWidget):
 
         self.tab_widget.addTab(preview_widget, "Data Preview")
 
+    def setup_summary_tab(self):
+        """Setup cell summary statistics tab"""
+        summary_widget = QWidget()
+        layout = QVBoxLayout(summary_widget)
+
+        # Summary controls (removed unnecessary buttons)
+        # No control buttons needed - summary auto-refreshes
+
+        # Summary info label
+        self.summary_info_label = QLabel("Cell Summary Statistics")
+        summary_info_font = QFont()
+        summary_info_font.setBold(True)
+        self.summary_info_label.setFont(summary_info_font)
+        layout.addWidget(self.summary_info_label)
+
+        # Summary table
+        self.summary_table = QTableWidget()
+        self.summary_table.setAlternatingRowColors(True)
+        self.summary_table.horizontalHeader().setStretchLastSection(True)
+
+        layout.addWidget(self.summary_table)
+
+        self.tab_widget.addTab(summary_widget, "Summary")
+
     def setup_progress_panel(self, parent_layout):
         """Setup progress and status panel"""
         progress_group = QGroupBox("Export Progress")
@@ -455,16 +478,24 @@ class ExportWidget(QWidget):
     def on_time_per_frame_changed(self, value):
         """Handle time per frame change"""
         self.export_service.set_time_per_frame(value)
+        # Refresh summary table if it exists and we're on the summary tab
+        if hasattr(self, "summary_table") and hasattr(self, "tab_widget"):
+            if self.tab_widget.currentIndex() == 2:  # Summary tab
+                self.update_summary_table()
 
     def on_tab_changed(self, index):
         """Handle tab selection change"""
         # Update status to reflect current tab (only if status_label exists)
         if hasattr(self, "status_label"):
-            tab_names = ["Configuration", "Data Preview"]
+            tab_names = ["Configuration", "Data Preview", "Summary"]
             if 0 <= index < len(tab_names):
                 self.status_label.setText(
                     f"Ready to export - {tab_names[index]} tab selected"
                 )
+
+        # Auto-refresh summary table when summary tab is selected
+        if index == 2 and hasattr(self, "summary_table"):  # Summary tab index is 2
+            self.update_summary_table()
 
     def browse_output_directory(self):
         """Browse for output directory"""
@@ -629,6 +660,11 @@ class ExportWidget(QWidget):
         if frame_count > 0:
             self.update_frame_preview()
 
+        # Also refresh summary if we're on the summary tab
+        if hasattr(self, "tab_widget") and hasattr(self, "summary_table"):
+            if self.tab_widget.currentIndex() == 2:  # Summary tab
+                self.update_summary_table()
+
     def update_frame_preview(self):
         """Update preview table with current frame data"""
         frame_index = self.preview_frame_spin.value()
@@ -642,13 +678,31 @@ class ExportWidget(QWidget):
         # Setup table
         self.preview_table.setRowCount(len(frame_data))
         if frame_data:
-            columns = list(frame_data[0].keys())
-            self.preview_table.setColumnCount(len(columns))
-            self.preview_table.setHorizontalHeaderLabels(columns)
+            data_keys = list(frame_data[0].keys())
+            self.preview_table.setColumnCount(len(data_keys))
+
+            # Map data keys to custom headers
+            header_mapping = {
+                "frame_id": "Frame ID",
+                "cell_id": "Cell ID",
+                "time_minutes": "Time in Minutes",
+                "x_px": "x position (pixel)",
+                "y_px": "y position (pixel)",
+                "area_px2": "Area (pixel²)",
+                "perimeter_px": "Perimeter (pixel)",
+                "circularity": "Circularity",
+                "ellipse_aspect_ratio": "Ellipse Aspect Ratio",
+                "ellipse_angle": "Ellipse Angle",
+                "solidity": "Solidity",
+            }
+
+            # Create custom headers based on actual data keys
+            column_headers = [header_mapping.get(key, key) for key in data_keys]
+            self.preview_table.setHorizontalHeaderLabels(column_headers)
 
             # Fill data
             for row, data in enumerate(frame_data):
-                for col, key in enumerate(columns):
+                for col, key in enumerate(data_keys):
                     value = data[key]
                     if isinstance(value, float):
                         item = QTableWidgetItem(f"{value:.3f}")
@@ -658,6 +712,109 @@ class ExportWidget(QWidget):
 
             # Resize columns
             self.preview_table.resizeColumnsToContents()
+
+    def update_summary_table(self):
+        """Update summary table with per-cell statistics"""
+        try:
+            # Get detailed cell summary from export service
+            detailed_summary = self.export_service.get_detailed_cell_summary()
+
+            if not detailed_summary or not detailed_summary.get("cells"):
+                self.summary_table.setRowCount(0)
+                self.summary_table.setColumnCount(0)
+                self.summary_info_label.setText("No cell data available for summary")
+                return
+
+            cells_data = detailed_summary["cells"]
+            cell_count = detailed_summary["cell_count"]
+
+            # Update info label
+            self.summary_info_label.setText(
+                f"Cell Summary Statistics ({cell_count} cells)"
+            )
+
+            # Define data keys and their order
+            data_keys = [
+                "cell_id",
+                "total_distance_px",
+                "displacement_px", 
+                "average_velocity_px_per_min",
+                "average_speed_px_per_min",
+                "max_speed_px_per_min",
+                "frame_count",
+                "time_span_minutes",
+                "average_area_px2",
+                "average_perimeter_px",
+                "average_circularity",
+                "average_ellipse_aspect_ratio",
+                "average_solidity",
+            ]
+
+            # Map data keys to custom headers
+            header_mapping = {
+                "cell_id": "Cell ID",
+                "total_distance_px": "Total Distance (px)",
+                "displacement_px": "Displacement (px)",
+                "average_velocity_px_per_min": "Avg Velocity (px/min)",
+                "average_speed_px_per_min": "Avg Speed (px/min)",
+                "max_speed_px_per_min": "Max Speed (px/min)",
+                "frame_count": "Frame Count",
+                "time_span_minutes": "Time Span (min)",
+                "average_area_px2": "Avg Area (px²)",
+                "average_perimeter_px": "Avg Perimeter (px)",
+                "average_circularity": "Avg Circularity",
+                "average_ellipse_aspect_ratio": "Avg Aspect Ratio",
+                "average_solidity": "Avg Solidity",
+            }
+
+            # Create custom headers based on data keys
+            column_headers = [header_mapping.get(key, key) for key in data_keys]
+
+            # Setup table
+            self.summary_table.setRowCount(len(cells_data))
+            self.summary_table.setColumnCount(len(data_keys))
+            self.summary_table.setHorizontalHeaderLabels(column_headers)
+
+            # Fill data
+            for row, (cell_id, cell_data) in enumerate(sorted(cells_data.items())):
+                trajectory = cell_data["trajectory"]
+                morphology = cell_data["morphology"]
+
+                # Create data dictionary for this row
+                row_data = {
+                    "cell_id": str(cell_id),
+                    "total_distance_px": f"{trajectory['total_distance_px']:.2f}",
+                    "displacement_px": f"{trajectory['displacement_px']:.2f}",
+                    "average_velocity_px_per_min": f"{trajectory['average_velocity_px_per_min']:.2f}",
+                    "average_speed_px_per_min": f"{trajectory['average_speed_px_per_min']:.2f}",
+                    "max_speed_px_per_min": f"{trajectory['max_speed_px_per_min']:.2f}",
+                    "frame_count": str(trajectory["frame_count"]),
+                    "time_span_minutes": f"{trajectory['time_span_minutes']:.1f}",
+                    "average_area_px2": f"{morphology['average_area_px2']:.1f}",
+                    "average_perimeter_px": f"{morphology['average_perimeter_px']:.1f}",
+                    "average_circularity": f"{morphology['average_circularity']:.3f}",
+                    "average_ellipse_aspect_ratio": f"{morphology['average_ellipse_aspect_ratio']:.2f}",
+                    "average_solidity": f"{morphology['average_solidity']:.3f}",
+                }
+
+                # Add items to table using data keys
+                for col, key in enumerate(data_keys):
+                    value = row_data[key]
+                    item = QTableWidgetItem(value)
+                    # Right-align numeric columns (all except cell ID)
+                    if col > 0:
+                        item.setTextAlignment(
+                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    self.summary_table.setItem(row, col, item)
+
+            # Resize columns to fit headers properly
+            self.summary_table.resizeColumnsToContents()
+
+        except Exception as e:
+            self.summary_info_label.setText(f"Error loading summary: {str(e)}")
+            self.summary_table.setRowCount(0)
+            self.summary_table.setColumnCount(0)
 
     # ========================================
     # PUBLIC METHODS
@@ -679,3 +836,7 @@ class ExportWidget(QWidget):
 
         # Refresh preview
         self.refresh_preview()
+
+        # Initialize summary table
+        if hasattr(self, "summary_table"):
+            self.update_summary_table()
