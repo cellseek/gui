@@ -52,6 +52,8 @@ class ExportWorker(QThread):
         """Execute the export operation"""
         if self.operation == "csv":
             self.export_service.export_to_csv(**self.kwargs)
+        elif self.operation == "summary":
+            self.export_service.export_cell_summary_to_csv(**self.kwargs)
         elif self.operation == "video":
             self.export_service.export_annotated_video(**self.kwargs)
         elif self.operation == "frames":
@@ -246,6 +248,10 @@ class ExportWidget(QWidget):
         self.export_csv_check = QCheckBox("CSV Data File")
         self.export_csv_check.setChecked(True)
         format_layout.addWidget(self.export_csv_check)
+
+        self.export_summary_check = QCheckBox("Summary Statistics CSV")
+        self.export_summary_check.setChecked(True)
+        format_layout.addWidget(self.export_summary_check)
 
         self.export_video_check = QCheckBox("Annotated Video")
         format_layout.addWidget(self.export_video_check)
@@ -545,6 +551,7 @@ class ExportWidget(QWidget):
         if not any(
             [
                 self.export_csv_check.isChecked(),
+                self.export_summary_check.isChecked(),
                 self.export_video_check.isChecked(),
                 self.export_frames_check.isChecked(),
             ]
@@ -603,6 +610,18 @@ class ExportWidget(QWidget):
                 self.export_service,
                 "csv",
                 output_path=csv_path,
+                frame_range=frame_range,
+            )
+            self.export_worker.start()
+            self.export_worker.wait()
+
+        # Export Summary CSV
+        if self.export_summary_check.isChecked():
+            summary_path = os.path.join(export_dir, f"{filename_prefix}_summary.csv")
+            self.export_worker = ExportWorker(
+                self.export_service,
+                "summary",
+                output_path=summary_path,
                 frame_range=frame_range,
             )
             self.export_worker.start()
@@ -688,7 +707,7 @@ class ExportWidget(QWidget):
                 "time_minutes": "Time in Minutes",
                 "x_px": "x Position (pixel)",
                 "y_px": "y Position (pixel)",
-                "area_px2": "Area (pixel²)",
+                "area_px2": "Area (pixel^2)",
                 "perimeter_px": "Perimeter (pixel)",
                 "circularity": "Circularity",
                 "ellipse_aspect_ratio": "Ellipse Aspect Ratio",
@@ -760,7 +779,7 @@ class ExportWidget(QWidget):
                 "max_speed_px_per_min": "Max Speed (px/min)",
                 "frame_count": "Frame Count",
                 "time_span_minutes": "Time Span (min)",
-                "average_area_px2": "Avg Area (px²)",
+                "average_area_px2": "Avg Area (px^2)",
                 "average_perimeter_px": "Avg Perimeter (px)",
                 "average_circularity": "Avg Circularity",
                 "average_ellipse_aspect_ratio": "Avg Aspect Ratio",

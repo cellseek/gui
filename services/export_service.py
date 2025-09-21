@@ -400,24 +400,38 @@ class ExportService(QObject):
             self.status_updated.emit("Writing CSV file...")
             with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
                 fieldnames = [
-                    "frame_id",
-                    "cell_id",
-                    "time_minutes",
-                    "x_px",
-                    "y_px",
-                    "area_px2",
-                    "perimeter_px",
-                    "circularity",
-                    "ellipse_aspect_ratio",
-                    "ellipse_angle",
-                    "solidity",
+                    "Frame ID",
+                    "Cell ID",
+                    "Time in Minutes",
+                    "x Position (pixel)",
+                    "y Position (pixel)",
+                    "Area (pixel^2)",
+                    "Perimeter (pixel)",
+                    "Circularity",
+                    "Ellipse Aspect Ratio",
+                    "Ellipse Angle",
+                    "Solidity",
                 ]
 
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
 
                 for i, row in enumerate(all_data):
-                    writer.writerow(row)
+                    # Map internal field names to UI header names
+                    csv_row = {
+                        "Frame ID": row["frame_id"],
+                        "Cell ID": row["cell_id"],
+                        "Time in Minutes": row["time_minutes"],
+                        "x Position (pixel)": row["x_px"],
+                        "y Position (pixel)": row["y_px"],
+                        "Area (pixel^2)": row["area_px2"],
+                        "Perimeter (pixel)": row["perimeter_px"],
+                        "Circularity": row["circularity"],
+                        "Ellipse Aspect Ratio": row["ellipse_aspect_ratio"],
+                        "Ellipse Angle": row["ellipse_angle"],
+                        "Solidity": row["solidity"],
+                    }
+                    writer.writerow(csv_row)
 
                     # Update progress
                     progress = 50 + int((i + 1) / len(all_data) * 50)  # 50-100%
@@ -555,31 +569,54 @@ class ExportService(QObject):
 
             with open(output_path, "w", newline="", encoding="utf-8") as csvfile:
                 fieldnames = [
-                    "cell_id",
-                    "total_distance_px",
-                    "displacement_px",
-                    "average_velocity_px_per_min",
-                    "average_speed_px_per_min",
-                    "max_speed_px_per_min",
-                    "frame_count",
-                    "time_span_minutes",
-                    "average_area_px2",
-                    "average_perimeter_px",
-                    "average_circularity",
-                    "average_ellipse_aspect_ratio",
-                    "average_solidity",
-                    "std_area_px2",
-                    "std_perimeter_px",
-                    "std_circularity",
-                    "std_ellipse_aspect_ratio",
-                    "std_solidity",
+                    "Cell ID",
+                    "Total Distance (px)",
+                    "Displacement (px)",
+                    "Avg Velocity (px/min)",
+                    "Avg Speed (px/min)",
+                    "Max Speed (px/min)",
+                    "Frame Count",
+                    "Time Span (min)",
+                    "Avg Area (px^2)",
+                    "Avg Perimeter (px)",
+                    "Avg Circularity",
+                    "Avg Aspect Ratio",
+                    "Avg Solidity",
+                    "Std Area (px^2)",
+                    "Std Perimeter (px)",
+                    "Std Circularity",
+                    "Std Aspect Ratio",
+                    "Std Solidity",
                 ]
 
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
 
-                for row in summary_data:
-                    writer.writerow(row)
+                for row_data in summary_data:
+                    # Map internal field names to UI header names
+                    csv_row = {
+                        "Cell ID": row_data["cell_id"],
+                        "Total Distance (px)": row_data["total_distance_px"],
+                        "Displacement (px)": row_data["displacement_px"],
+                        "Avg Velocity (px/min)": row_data[
+                            "average_velocity_px_per_min"
+                        ],
+                        "Avg Speed (px/min)": row_data["average_speed_px_per_min"],
+                        "Max Speed (px/min)": row_data["max_speed_px_per_min"],
+                        "Frame Count": row_data["frame_count"],
+                        "Time Span (min)": row_data["time_span_minutes"],
+                        "Avg Area (px^2)": row_data["average_area_px2"],
+                        "Avg Perimeter (px)": row_data["average_perimeter_px"],
+                        "Avg Circularity": row_data["average_circularity"],
+                        "Avg Aspect Ratio": row_data["average_ellipse_aspect_ratio"],
+                        "Avg Solidity": row_data["average_solidity"],
+                        "Std Area (px^2)": row_data["std_area_px2"],
+                        "Std Perimeter (px)": row_data["std_perimeter_px"],
+                        "Std Circularity": row_data["std_circularity"],
+                        "Std Aspect Ratio": row_data["std_ellipse_aspect_ratio"],
+                        "Std Solidity": row_data["std_solidity"],
+                    }
+                    writer.writerow(csv_row)
 
             self.progress_updated.emit(100)
             self.export_completed.emit(
