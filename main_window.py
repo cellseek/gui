@@ -227,6 +227,17 @@ class MainWindow(QMainWindow):
 
     def on_restart_requested(self):
         """Handle restart navigation - go back to media import"""
+        # Clear all state in frame by frame widget
+        self.frame_by_frame_widget.clear_all_data()
+
+        # Clear any pending frame paths
+        if hasattr(self, "_pending_frame_paths"):
+            delattr(self, "_pending_frame_paths")
+
+        # Reset media import widget state
+        self.media_import_widget.reset_state()
+
+        # Switch back to import view
         self.stacked_widget.setCurrentIndex(0)
         self.status_label.setText("Ready - Import video or images to begin")
 

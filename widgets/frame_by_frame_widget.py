@@ -401,6 +401,23 @@ class FrameByFrameWidget(QWidget):
         """Handle restart button click"""
         self.restart_requested.emit()
 
+    def clear_all_data(self):
+        """Clear all data and reset widget state"""
+        # Clear storage service data
+        self.storage_service.clear_all_data()
+
+        # Reset widget state
+        self._models_initialized = False
+
+        # Clear interactive widget state
+        self.curr_image_label.clear_all_state()
+        self.prev_image_label.clear_all_state()
+
+        # Reset UI elements
+        self.frame_info_label.setText("No frames loaded")
+        self.export_button.setVisible(False)
+        self.restart_button.setVisible(False)
+
     # ------------------------------------------------------------------------ #
     # ---------------------------- Initialization ---------------------------- #
     # ------------------------------------------------------------------------ #

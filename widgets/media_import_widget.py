@@ -100,3 +100,8 @@ class MediaImportWidget(QWidget):
             self.status_update.emit(f"Loaded {len(sorted_paths)} image files")
         else:
             QMessageBox.warning(self, "No Valid Images", "No valid image files found")
+
+    def reset_state(self):
+        """Reset widget state"""
+        # The media import widget is mostly stateless, but we can reset the drop zone
+        self.drop_zone.reset_state()

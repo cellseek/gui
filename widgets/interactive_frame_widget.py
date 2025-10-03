@@ -101,6 +101,24 @@ class InteractiveFrameWidget(QLabel):
         self.preview_score = score
         self.update_display()
 
+    def clear_all_state(self):
+        """Clear all internal state including images and masks"""
+        self.image = None
+        self.masks = None
+        self.preview_mask = None
+        self.preview_score = 0.0
+        self.overlay_image = None
+        self.scale_factor = 1.0
+        self.image_offset = (0, 0)
+        self.pan_offset = (0, 0)
+        self.zoom_factor = 1.0
+        self.panning = False
+        self.last_pan_point = None
+
+        # Clear display
+        self.clear()
+        self.setText("No image loaded")
+
     def set_mask_transparency(self, transparency: float):
         """Set the transparency for mask overlay (0.0 = transparent, 1.0 = opaque)"""
         self.mask_transparency = max(0.0, min(1.0, transparency))
@@ -189,6 +207,13 @@ class InteractiveFrameWidget(QLabel):
     def _overlay_masks(self, image: np.ndarray, masks: np.ndarray) -> np.ndarray:
         """Overlay masks on image with transparency and optional cell IDs"""
         if masks is None or np.max(masks) == 0:
+            return image
+
+        # Safety check: ensure mask and image dimensions match
+        if image.shape[:2] != masks.shape[:2]:
+            print(
+                f"Warning: Image shape {image.shape[:2]} != mask shape {masks.shape[:2]}. Skipping mask overlay."
+            )
             return image
 
         overlay = image.copy()

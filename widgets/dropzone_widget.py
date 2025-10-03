@@ -171,3 +171,24 @@ class DropZoneWidget(QWidget):
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
 
         return ext in image_exts or ext in video_exts
+
+    def reset_state(self):
+        """Reset widget state"""
+        # Reset visual state to default (same as dragLeaveEvent)
+        self.border_frame.setStyleSheet(
+            """
+            QFrame {
+                border: 4px dashed #008080;
+                border-radius: 12px;
+                background-color: rgba(64, 64, 64, 0.8);
+                margin: 10px;
+            }
+            QLabel {
+                color: #b0b0b0;
+                border: none;
+                font-size: 14px;
+                background-color: transparent;
+            }
+        """
+        )
+        # The dropzone widget is stateless, but this method provides consistency
