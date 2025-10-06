@@ -78,6 +78,8 @@ class MainWindow(QMainWindow):
         # Screen 2: Frame-by-Frame Processing
         self.frame_by_frame_widget = FrameByFrameWidget()
         self.stacked_widget.addWidget(self.frame_by_frame_widget)
+        self.media_import_widget.frame_widget = self.frame_by_frame_widget
+
 
         # Screen 3: Export Processing
         from widgets.export_widget import ExportWidget
