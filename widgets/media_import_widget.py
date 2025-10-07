@@ -45,7 +45,7 @@ class MediaImportWidget(QWidget):
             self,
             "Select Image Files",
             "",
-            "Image Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif);;All Files (*)",
+            "Media Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif *.mp4);;All Files (*)",
         )
 
         if file_paths:
@@ -63,45 +63,92 @@ class MediaImportWidget(QWidget):
         if file_paths:
             self.process_files(file_paths)
 
+    def extract_frames_from_video(self, video_path, frame_interval=50):
+        """Extract every Nth frame from MP4 video and save as images"""
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return []
+
+        temp_dir = Path("temp_frames")
+        temp_dir.mkdir(exist_ok=True)
+        frame_paths = []
+        index = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if index % frame_interval == 0:
+                frame_path = temp_dir / f"frame_{index:04d}.png"
+                cv2.imwrite(str(frame_path), frame)
+                frame_paths.append(str(frame_path))
+
+            index += 1
+
+        cap.release()
+        return frame_paths
+
     def handle_dropped_files(self, file_paths: List[str]):
         """Handle files dropped on the drop zone"""
         if file_paths:
             self.process_files(file_paths)
 
-    def process_files(self, file_paths: List[str]):
-        """Process image files"""
-
-        # Validate all files are readable images
+    def process_files(self, file_paths):
+        """Process image and video files"""
         valid_paths = []
 
         for file_path in file_paths:
-            try:
-                # Try to read the image to verify it's valid
-                img = cv2.imread(file_path)
-                if img is not None:
-                    valid_paths.append(file_path)
+            ext = Path(file_path).suffix.lower()
+
+            if ext == ".mp4":
+                # Extract video frames
+                video_frames = self.extract_frames_from_video(
+                    file_path, frame_interval=1
+                )
+                if video_frames:
+                    valid_paths.extend(video_frames)
                 else:
                     QMessageBox.warning(
                         self,
-                        "Invalid Image",
-                        f"Could not read image: {Path(file_path).name}",
+                        "Video Error",
+                        f"Failed to extract frames from: {Path(file_path).name}",
                     )
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Image Error",
-                    f"Error reading {Path(file_path).name}: {str(e)}",
-                )
+            else:
+                try:
+                    img = cv2.imread(file_path)
+                    if img is not None:
+                        valid_paths.append(file_path)
+                    else:
+                        QMessageBox.warning(
+                            self,
+                            "Invalid Image",
+                            f"Could not read image: {Path(file_path).name}",
+                        )
+                except Exception as e:
+                    QMessageBox.warning(
+                        self,
+                        "Image Error",
+                        f"Error reading {Path(file_path).name}: {str(e)}",
+                    )
 
         if valid_paths:
-            # Sort paths naturally (frame_001.png, frame_002.png, etc.)
             sorted_paths = natsorted(valid_paths)
             self.frames_ready.emit(sorted_paths)
-            self.status_update.emit(f"Loaded {len(sorted_paths)} image files")
+            self.status_update.emit(f"Loaded {len(sorted_paths)} frames")
         else:
-            QMessageBox.warning(self, "No Valid Images", "No valid image files found")
+            QMessageBox.warning(
+                self, "No Valid Media", "No valid image or video frames found"
+            )
 
     def reset_state(self):
-        """Reset widget state"""
-        # The media import widget is mostly stateless, but we can reset the drop zone
-        self.drop_zone.reset_state()
+        """Reset internal state after restart"""
+        # Clear any cached paths or data
+        self.selected_paths = []
+        self.status_update.emit("Ready - Import video or images to begin")
+
+        # Optionally clear temp_frames folder
+        temp_dir = Path("temp_frames")
+        if temp_dir.exists():
+            for file in temp_dir.glob("*.png"):
+                file.unlink()
