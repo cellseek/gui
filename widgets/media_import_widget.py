@@ -8,7 +8,7 @@ from typing import List
 import cv2
 from natsort import natsorted
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QFileDialog, QMessageBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
 from widgets.dropzone_widget import DropZoneWidget
 
@@ -19,6 +19,7 @@ class MediaImportWidget(QWidget):
     # Signals
     frames_ready = pyqtSignal(list)  # list of frame paths
     status_update = pyqtSignal(str)  # status message
+    auto_segment_toggled = pyqtSignal(bool)  # auto-segmentation enabled/disabled
 
     def __init__(self):
         super().__init__()
@@ -31,6 +32,12 @@ class MediaImportWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 32, 32, 32)
         layout.setSpacing(8)
+
+        # Auto-segmentation toggle
+        self.auto_segment_checkbox = QCheckBox("Auto-segment first frame with CellSAM")
+        self.auto_segment_checkbox.setChecked(True)  # Default to enabled
+        self.auto_segment_checkbox.toggled.connect(self.auto_segment_toggled.emit)
+        layout.addWidget(self.auto_segment_checkbox)
 
         # Drop zone with upload button
         self.drop_zone = DropZoneWidget()
@@ -134,6 +141,7 @@ class MediaImportWidget(QWidget):
 
         if valid_paths:
             sorted_paths = natsorted(valid_paths)
+            # Emit frames ready with current auto-segment setting
             self.frames_ready.emit(sorted_paths)
             self.status_update.emit(f"Loaded {len(sorted_paths)} frames")
         else:
@@ -141,10 +149,13 @@ class MediaImportWidget(QWidget):
                 self, "No Valid Media", "No valid image or video frames found"
             )
 
+    def is_auto_segment_enabled(self) -> bool:
+        """Get current state of auto-segmentation toggle"""
+        return self.auto_segment_checkbox.isChecked()
+
     def reset_state(self):
         """Reset internal state after restart"""
         # Clear any cached paths or data
-        self.selected_paths = []
         self.status_update.emit("Ready - Import video or images to begin")
 
         # Optionally clear temp_frames folder

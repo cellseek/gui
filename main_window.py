@@ -80,7 +80,6 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.frame_by_frame_widget)
         self.media_import_widget.frame_widget = self.frame_by_frame_widget
 
-
         # Screen 3: Export Processing
         from widgets.export_widget import ExportWidget
 
@@ -161,25 +160,58 @@ class MainWindow(QMainWindow):
         self.status_label.setText(message)
 
     def on_frames_ready(self, frame_paths: List[str]):
-        """Handle frames ready from media import - run CellSAM processing"""
+        """Handle frames ready from media import - conditionally run CellSAM processing"""
 
         # First, preprocess the frames by setting them in storage service
         # This will trigger the image preprocessing (resizing) internally
         self.frame_by_frame_widget.storage_service.set_image_paths(frame_paths)
 
-        # Get the processed path for the first frame
-        first_frame_processed_path = (
-            self.frame_by_frame_widget.storage_service.get_processed_path(0)
-        )
-        if first_frame_processed_path is None:
-            # Fallback to original path if preprocessing failed
-            first_frame_processed_path = frame_paths[0]
-
         # Store frame paths for later use
         self._pending_frame_paths = frame_paths
 
-        # Run CellSAM on the processed first frame asynchronously
-        self.cellsam_service.segment_first_frame_async(first_frame_processed_path)
+        # Check if auto-segmentation is enabled
+        if self.media_import_widget.is_auto_segment_enabled():
+            # Get the processed path for the first frame
+            first_frame_processed_path = (
+                self.frame_by_frame_widget.storage_service.get_processed_path(0)
+            )
+            if first_frame_processed_path is None:
+                # Fallback to original path if preprocessing failed
+                first_frame_processed_path = frame_paths[0]
+
+            # Run CellSAM on the processed first frame asynchronously
+            self.cellsam_service.segment_first_frame_async(first_frame_processed_path)
+        else:
+            # Skip auto-segmentation, initialize directly without masks
+            self._initialize_without_segmentation(frame_paths)
+
+    def _initialize_without_segmentation(self, frame_paths: List[str]):
+        """Initialize frame-by-frame widget without auto-segmentation"""
+        # Get the first frame to create empty masks with correct dimensions
+        first_frame = self.frame_by_frame_widget.storage_service.get_frame(0)
+        if first_frame is None:
+            # Fallback to loading original first frame
+            import cv2
+            first_frame = cv2.imread(frame_paths[0])
+            first_frame = cv2.cvtColor(first_frame, cv2.COLOR_BGR2RGB)
+        
+        # Create empty mask with same dimensions as first frame
+        h, w = first_frame.shape[:2]
+        empty_masks = np.zeros((h, w), dtype=np.uint16)
+        
+        # Initialize with empty masks
+        self.frame_by_frame_widget.initialize(frame_paths, empty_masks)
+        self.status_label.setText("Frames loaded without auto-segmentation")
+        
+        # Switch to frame-by-frame view
+        self.stacked_widget.setCurrentIndex(1)
+        
+        # Initialize models
+        self.frame_by_frame_widget.initialize_models()
+        
+        # Clean up
+        if hasattr(self, "_pending_frame_paths"):
+            delattr(self, "_pending_frame_paths")
 
     def _on_cellsam_complete(self, first_frame_masks: np.ndarray):
         """Handle successful CellSAM completion"""
