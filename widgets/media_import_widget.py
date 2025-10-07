@@ -45,7 +45,7 @@ class MediaImportWidget(QWidget):
             self,
             "Select Image Files",
             "",
-            "Media Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif *.mp4);;All Files (*)"
+            "Media Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif *.mp4);;All Files (*)",
         )
 
         if file_paths:
@@ -62,8 +62,8 @@ class MediaImportWidget(QWidget):
 
         if file_paths:
             self.process_files(file_paths)
-    
-    def extract_frames_from_video(self, video_path, frame_interval = 50):
+
+    def extract_frames_from_video(self, video_path, frame_interval=50):
         """Extract every Nth frame from MP4 video and save as images"""
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -89,12 +89,11 @@ class MediaImportWidget(QWidget):
         cap.release()
         return frame_paths
 
-
     def handle_dropped_files(self, file_paths: List[str]):
         """Handle files dropped on the drop zone"""
         if file_paths:
             self.process_files(file_paths)
-            
+
     def process_files(self, file_paths):
         """Process image and video files"""
         valid_paths = []
@@ -104,7 +103,9 @@ class MediaImportWidget(QWidget):
 
             if ext == ".mp4":
                 # Extract video frames
-                video_frames = self.extract_frames_from_video(file_path,frame_interval= 50)
+                video_frames = self.extract_frames_from_video(
+                    file_path, frame_interval=1
+                )
                 if video_frames:
                     valid_paths.extend(video_frames)
                 else:
@@ -136,8 +137,10 @@ class MediaImportWidget(QWidget):
             self.frames_ready.emit(sorted_paths)
             self.status_update.emit(f"Loaded {len(sorted_paths)} frames")
         else:
-            QMessageBox.warning(self, "No Valid Media", "No valid image or video frames found")
-        
+            QMessageBox.warning(
+                self, "No Valid Media", "No valid image or video frames found"
+            )
+
     def reset_state(self):
         """Reset internal state after restart"""
         # Clear any cached paths or data
@@ -149,5 +152,3 @@ class MediaImportWidget(QWidget):
         if temp_dir.exists():
             for file in temp_dir.glob("*.png"):
                 file.unlink()
-
-
