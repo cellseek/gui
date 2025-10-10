@@ -1,5 +1,7 @@
 # Core GUI and Application Dependencies
 PyQt6
+PyQt6-Qt6
+PyQt6-Multimedia
 numpy
 opencv-python
 psutil

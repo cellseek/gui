@@ -25,6 +25,7 @@ python main.py
 
 - **Modern Dark Theme**: Professional, eye-friendly interface optimized for long work sessions
 - **Drag & Drop Import**: Support for video files and image sequences
+- **Video Trimming with Preview**: Interactive video player with visual range slider for precise trimming
 - **Frame-by-Frame Workflow**: Manual supervision at every step
 - **CellSAM Integration**: Automatic cell segmentation for initial frame
 - **SAM Manual Annotation**: Point/box-based editing and mask removal
@@ -76,12 +77,17 @@ pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
 - Create a new project or open an existing one
 - Choose your working directory
 
-### 2. Frame Loading
+### 2. Media Import
 
-- Use the Frame Manager tab
-- Drag and drop image files or video frames
+- Use the Media Import widget
+- Drag and drop image files or video files (.mp4)
+- **For videos**: Interactive trim dialog with preview player
+  - Play/pause and scrub through video
+  - Drag range slider handles to select trim points
+  - Preview start/end points before confirming
+  - See real-time duration updates
 - Frames will be automatically sorted and displayed as thumbnails
-- Supported formats: PNG, JPEG, TIFF, BMP
+- Supported formats: PNG, JPEG, TIFF, BMP, MP4
 
 ### 3. Cell Segmentation
 

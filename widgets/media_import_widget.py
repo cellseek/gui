@@ -8,57 +8,17 @@ from typing import List
 import cv2
 from natsort import natsorted
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QCheckBox, QFileDialog, QMessageBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QFileDialog,
+    QMessageBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from widgets.dropzone_widget import DropZoneWidget
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton
-
-class VideoTrimDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Trim Video")
-        self.setMinimumWidth(300)
-
-        layout = QVBoxLayout(self)
-
-        # Start time
-        start_layout = QHBoxLayout()
-        start_layout.addWidget(QLabel("Start (sec):"))
-        self.start_input = QLineEdit()
-        self.start_input.setPlaceholderText("Leave empty for full video")
-        start_layout.addWidget(self.start_input)
-        layout.addLayout(start_layout)
-
-        # End time
-        end_layout = QHBoxLayout()
-        end_layout.addWidget(QLabel("End (sec):"))
-        self.end_input = QLineEdit()
-        self.end_input.setPlaceholderText("Leave empty for full video")
-        end_layout.addWidget(self.end_input)
-        layout.addLayout(end_layout)
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        confirm_btn = QPushButton("Confirm")
-        cancel_btn = QPushButton("Cancel")
-        confirm_btn.clicked.connect(self.accept)
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(confirm_btn)
-        button_layout.addWidget(cancel_btn)
-        layout.addLayout(button_layout)
-
-    def get_trim_range(self):
-        start_text = self.start_input.text().strip()
-        end_text = self.end_input.text().strip()
-
-        try:
-            start = float(start_text) if start_text else None
-            end = float(end_text) if end_text else None
-            return start, end
-        except ValueError:
-            return "invalid", "invalid"
-
-
+from widgets.video_trim_widget import VideoTrimWidget
 
 
 class MediaImportWidget(QWidget):
@@ -78,20 +38,35 @@ class MediaImportWidget(QWidget):
     def setup_ui(self):
         """Setup the user interface"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 32, 32, 32)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Stacked widget to switch between import and trim views
+        self.stacked_widget = QStackedWidget()
+        layout.addWidget(self.stacked_widget)
+
+        # Page 0: Import page (dropzone)
+        import_page = QWidget()
+        import_layout = QVBoxLayout(import_page)
+        import_layout.setContentsMargins(32, 32, 32, 32)
+        import_layout.setSpacing(8)
 
         # Auto-segmentation toggle
         self.auto_segment_checkbox = QCheckBox("Auto-segment first frame with CellSAM")
         self.auto_segment_checkbox.setChecked(True)  # Default to enabled
         self.auto_segment_checkbox.toggled.connect(self.auto_segment_toggled.emit)
-        layout.addWidget(self.auto_segment_checkbox)
+        import_layout.addWidget(self.auto_segment_checkbox)
 
         # Drop zone with upload button
         self.drop_zone = DropZoneWidget()
         self.drop_zone.files_dropped.connect(self.handle_dropped_files)
         self.drop_zone.upload_clicked.connect(self.handle_upload_button)
-        layout.addWidget(self.drop_zone)
+        import_layout.addWidget(self.drop_zone)
+
+        self.stacked_widget.addWidget(import_page)
+
+        # Page 1: Video trim page (will be populated when needed)
+        self.video_trim_widget = None
 
     def handle_upload_button(self):
         """Handle upload button click - show file dialog"""
@@ -118,7 +93,9 @@ class MediaImportWidget(QWidget):
         if file_paths:
             self.process_files(file_paths)
 
-    def extract_frames_from_video(self, video_path, frame_interval=1, start_sec=None, end_sec=None):
+    def extract_frames_from_video(
+        self, video_path, frame_interval=1, start_sec=None, end_sec=None
+    ):
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return []
@@ -153,47 +130,60 @@ class MediaImportWidget(QWidget):
         """Handle files dropped on the drop zone"""
         if file_paths:
             self.process_files(file_paths)
-            
-    def handle_video_file(self, file_path: str) -> List[str]:
-        """Handle .mp4 video file with optional trimming"""
-        while True:
-            dialog = VideoTrimDialog(self)
-            if dialog.exec():
-                start_sec, end_sec = dialog.get_trim_range()
 
-                if start_sec == "invalid" or end_sec == "invalid":
-                    QMessageBox.warning(self, "Invalid Input", "Start and End must be valid numbers.")
-                    continue
+    def handle_video_file(self, file_path: str):
+        """Handle .mp4 video file with optional trimming - shows embedded trim UI"""
+        # Store the video path for later processing
+        self.pending_video_path = file_path
 
-                cap = cv2.VideoCapture(file_path)
-                if not cap.isOpened():
-                    QMessageBox.warning(self, "Video Error", "Unable to open video.")
-                    return []
+        # Create and show video trim widget
+        if self.video_trim_widget is not None:
+            self.video_trim_widget.cleanup()
+            self.stacked_widget.removeWidget(self.video_trim_widget)
+            self.video_trim_widget.deleteLater()
 
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                duration_sec = total_frames / fps if fps > 0 else 0
+        self.video_trim_widget = VideoTrimWidget(file_path, self)
+        self.video_trim_widget.trim_confirmed.connect(self.on_trim_confirmed)
+        self.video_trim_widget.trim_cancelled.connect(self.on_trim_cancelled)
 
-                # Correction out of bounds
-                if start_sec is not None and start_sec < 0:
-                    start_sec = 0.0
-                if end_sec is not None and end_sec > duration_sec:
-                    end_sec = duration_sec
+        # Add to stacked widget if not already there
+        if self.stacked_widget.count() == 1:
+            self.stacked_widget.addWidget(self.video_trim_widget)
+        else:
+            self.stacked_widget.removeWidget(self.stacked_widget.widget(1))
+            self.stacked_widget.insertWidget(1, self.video_trim_widget)
 
-                # Default logic
-                if start_sec is not None and end_sec is None:
-                    end_sec = duration_sec
-                if end_sec is not None and start_sec is None:
-                    start_sec = 0.0
+        # Switch to trim view
+        self.stacked_widget.setCurrentIndex(1)
 
-                return self.extract_frames_from_video(
-                    file_path,
-                    frame_interval=1,
-                    start_sec=start_sec,
-                    end_sec=end_sec,
-                )
-            else:
-                return []
+    def on_trim_confirmed(self, start_sec: float, end_sec: float):
+        """Called when user confirms trim selection"""
+        # Extract frames with the selected range
+        video_frames = self.extract_frames_from_video(
+            self.pending_video_path,
+            frame_interval=1,
+            start_sec=start_sec,
+            end_sec=end_sec,
+        )
+
+        # Switch back to import view
+        self.stacked_widget.setCurrentIndex(0)
+
+        # Process the frames
+        if video_frames:
+            sorted_paths = natsorted(video_frames)
+            self.frames_ready.emit(sorted_paths)
+            self.status_update.emit(f"Loaded {len(sorted_paths)} frames")
+        else:
+            QMessageBox.warning(
+                self, "No Frames", "No frames were extracted from the video"
+            )
+
+    def on_trim_cancelled(self):
+        """Called when user cancels trim"""
+        # Switch back to import view
+        self.stacked_widget.setCurrentIndex(0)
+        self.status_update.emit("Video import cancelled")
 
     def process_files(self, file_paths):
         """Process image and video files"""
@@ -203,9 +193,9 @@ class MediaImportWidget(QWidget):
             ext = Path(file_path).suffix.lower()
 
             if ext == ".mp4":
-                video_frames = self.handle_video_file(file_path)
-                if video_frames:
-                    valid_paths.extend(video_frames)
+                # Show trim UI - processing happens after user confirms
+                self.handle_video_file(file_path)
+                return  # Exit early, will continue after trim confirmation
             else:
                 image = cv2.imread(file_path)
                 if image is not None:
@@ -225,7 +215,6 @@ class MediaImportWidget(QWidget):
             QMessageBox.warning(
                 self, "No Valid Media", "No valid image or video frames found"
             )
-
 
     def is_auto_segment_enabled(self) -> bool:
         """Get current state of auto-segmentation toggle"""
