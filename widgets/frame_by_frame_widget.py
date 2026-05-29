@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 from services.annotation_service import AnnotationService
 from services.cell_track_service import CellTrackService
 from services.cutie_service import CutieService
+from services.mask_history_service import MaskHistoryService, MaskSnapshot
 from services.sam_service import SamService
 from services.storage_service import StorageService
 from widgets.cell_sidebar_widget import CellSidebarWidget
@@ -51,6 +52,7 @@ class FrameByFrameWidget(QWidget):
         self.sam_service = SamService(self)
         self.cutie_service = CutieService()
         self.cell_track_service = CellTrackService()
+        self._mask_history = MaskHistoryService()
 
         # Track pending async operations
         self._pending_frame_index = None
@@ -155,6 +157,20 @@ class FrameByFrameWidget(QWidget):
         self.next_button.clicked.connect(self.next_frame)
         self.next_button.setEnabled(False)
         nav_layout.addWidget(self.next_button)
+
+        nav_layout.addSpacing(12)
+
+        self.undo_button = QPushButton("Undo")
+        self.undo_button.setToolTip("Undo last mask edit (Ctrl+Z)")
+        self.undo_button.clicked.connect(self.on_undo)
+        self.undo_button.setEnabled(False)
+        nav_layout.addWidget(self.undo_button)
+
+        self.redo_button = QPushButton("Redo")
+        self.redo_button.setToolTip("Redo (Ctrl+Y)")
+        self.redo_button.clicked.connect(self.on_redo)
+        self.redo_button.setEnabled(False)
+        nav_layout.addWidget(self.redo_button)
 
         nav_layout.addSpacing(20)
 
@@ -399,6 +415,12 @@ class FrameByFrameWidget(QWidget):
         self.mode_shortcut = QShortcut(QKeySequence("Tab"), self)
         self.mode_shortcut.activated.connect(self.toggle_annotation_mode)
 
+        self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
+        self.undo_shortcut.activated.connect(self.on_undo)
+
+        self.redo_shortcut = QShortcut(QKeySequence.StandardKey.Redo, self)
+        self.redo_shortcut.activated.connect(self.on_redo)
+
     def setup_async_connections(self):
         """Setup connections for async operations"""
         # Connect CUTIE async signals
@@ -516,23 +538,36 @@ class FrameByFrameWidget(QWidget):
         """Handle restart button click"""
         self.restart_requested.emit()
 
+    def clear_tracking_state(self) -> None:
+        """Clear masks and tracking UI but keep loaded media and preprocess settings."""
+        self._mask_history.clear()
+        self._update_undo_redo_buttons()
+        self.storage_service.clear_all_masks()
+        self.storage_service.invalidate_frame_cache()
+        self.storage_service.set_current_frame_index(0)
+        self.cutie_service.reset_tracker()
+        self._selected_cell_id = None
+        self._pending_frame_index = None
+        self.curr_image_label.clear_all_state()
+        self.prev_image_label.clear_all_state()
+        self.cell_sidebar.clear()
+
     def clear_all_data(self):
         """Clear all data and reset widget state"""
-        # Clear storage service data
+        self._mask_history.clear()
         self.storage_service.clear_all_data()
 
         self.cutie_service.reset_tracker()
 
-        # Clear interactive widget state
         self.curr_image_label.clear_all_state()
         self.prev_image_label.clear_all_state()
         self.cell_sidebar.clear()
         self._selected_cell_id = None
 
-        # Reset UI elements
         self.frame_info_label.setText("No frames loaded")
         self.export_button.setVisible(False)
         self.restart_button.setVisible(False)
+        self._update_undo_redo_buttons()
 
     # ------------------------------------------------------------------------ #
     # ---------------------------- Initialization ---------------------------- #
@@ -540,6 +575,7 @@ class FrameByFrameWidget(QWidget):
 
     def initialize(self, first_frame_mask: np.ndarray):
         """Apply first-frame masks; media must already be opened in storage."""
+        self._mask_history.clear()
         self.storage_service.set_mask_for_frame(0, first_frame_mask.astype(np.uint16))
         self.cutie_service.reset_tracker()
         self.storage_service.set_current_frame_index(0)
@@ -599,6 +635,7 @@ class FrameByFrameWidget(QWidget):
         self.refresh_cell_inspector()
         self._apply_cell_highlighting()
         self._equalize_frame_panels()
+        self._update_undo_redo_buttons()
 
     def previous_frame(self):
         """Go to previous frame"""
@@ -671,6 +708,57 @@ class FrameByFrameWidget(QWidget):
             self.storage_service.set_current_frame_index(self._pending_frame_index)
             self.update_display()
             self._pending_frame_index = None
+
+    def begin_mask_edit(self) -> None:
+        """Snapshot masks from the current frame onward for undo."""
+        self._mask_history.push(self._capture_mask_snapshot_from_current())
+        self._update_undo_redo_buttons()
+
+    def _capture_mask_snapshot_from_current(self) -> MaskSnapshot:
+        return self._capture_mask_snapshot_from(
+            self.storage_service.get_current_frame_index()
+        )
+
+    def _capture_mask_snapshot_from(self, start_frame: int) -> MaskSnapshot:
+        snapshot: MaskSnapshot = []
+        for i in range(start_frame, self.storage_service.get_frame_count()):
+            masks = self.storage_service.get_mask_for_frame(i)
+            snapshot.append((i, masks.copy() if masks is not None else None))
+        return snapshot
+
+    def _restore_mask_snapshot(self, snapshot: MaskSnapshot) -> None:
+        for frame_index, masks in snapshot:
+            if masks is None:
+                self.storage_service.remove_mask_for_frame(frame_index)
+            else:
+                self.storage_service.set_mask_for_frame(frame_index, masks)
+        self.cutie_service.reset_tracker()
+        self.update_display()
+
+    def on_undo(self) -> None:
+        if self.is_cutie_running():
+            return
+        snapshot = self._mask_history.undo(self._capture_mask_snapshot_from_current)
+        if snapshot is None:
+            return
+        self._restore_mask_snapshot(snapshot)
+        self.status_update.emit("Undid mask edit")
+        self._update_undo_redo_buttons()
+
+    def on_redo(self) -> None:
+        if self.is_cutie_running():
+            return
+        snapshot = self._mask_history.redo(self._capture_mask_snapshot_from_current)
+        if snapshot is None:
+            return
+        self._restore_mask_snapshot(snapshot)
+        self.status_update.emit("Redid mask edit")
+        self._update_undo_redo_buttons()
+
+    def _update_undo_redo_buttons(self) -> None:
+        can_edit = not self.is_cutie_running()
+        self.undo_button.setEnabled(can_edit and self._mask_history.can_undo())
+        self.redo_button.setEnabled(can_edit and self._mask_history.can_redo())
 
     def toggle_annotation_mode(self):
         """Toggle between annotation modes using Tab key"""

@@ -22,6 +22,7 @@ class SamServiceDelegate(Protocol):
     def emit_status_update(self, message: str) -> None: ...
     def show_warning(self, title: str, message: str) -> None: ...
     def update_current_display_masks(self, masks: np.ndarray) -> None: ...
+    def begin_mask_edit(self) -> None: ...
 
 
 class SamService(QObject):
@@ -208,6 +209,7 @@ class SamService(QObject):
 
     def _on_sam_complete(self, mask: np.ndarray, score: float) -> None:
         """Handle SAM completion"""
+        self.delegate.begin_mask_edit()
         # Mark frame as loaded if it wasn't already
         if self._loaded_frame_index != self.delegate.get_current_frame_index():
             self._loaded_frame_index = self.delegate.get_current_frame_index()

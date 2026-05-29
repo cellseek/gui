@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from utils.frame_preprocess import PreprocessSettings
 from utils.image_preprocessor import ImagePreprocessor
 from utils.video_frame_source import VideoFrameSource
 
@@ -21,12 +22,16 @@ class StorageService:
         self._frame_masks: List[Optional[np.ndarray]] = []
         self._current_frame_index: int = 0
         self._preprocessor = ImagePreprocessor(max_size=512)
+        self._preprocess_settings = PreprocessSettings()
         self._frame_cache: Dict[int, np.ndarray] = {}
 
         self._media_kind: Optional[str] = None  # "images" | "video"
         self._image_paths: List[str] = []
+        self._all_image_paths: List[str] = []
         self._video_source: Optional[VideoFrameSource] = None
         self._frame_count: int = 0
+        self._source_frame_count: int = 0
+        self._index_offset: int = 0
         self._original_size: Optional[Tuple[int, int]] = None  # (height, width)
         self._processed_size: Optional[Tuple[int, int]] = None
 
@@ -58,13 +63,15 @@ class StorageService:
         self.clear_frames()
         self._media_kind = "images"
         self._image_paths = list(paths)
+        self._all_image_paths = list(paths)
+        self._image_paths = self._all_image_paths
+        self._source_frame_count = len(paths)
+        self._index_offset = 0
         self._frame_count = len(paths)
         self._frame_masks = [None] * self._frame_count
 
         rgb = cv2.cvtColor(first, cv2.COLOR_BGR2RGB)
-        processed, scale = self._preprocessor.resize_image(rgb)
-        self._apply_display_geometry(rgb, processed, scale)
-        self._frame_cache[0] = processed
+        self._finalize_open_session(self._preprocess_settings.apply(rgb))
 
     def open_video(
         self, video_path: str, frame_interval: int = DEFAULT_VIDEO_FRAME_INTERVAL
@@ -74,20 +81,75 @@ class StorageService:
         self._video_source = VideoFrameSource(video_path, frame_interval)
         self._media_kind = "video"
         self._image_paths = []
-        self._frame_count = self._video_source.logical_frame_count
+        self._all_image_paths = []
+        self._source_frame_count = self._video_source.logical_frame_count
+        self._index_offset = 0
+        self._frame_count = self._source_frame_count
         self._frame_masks = [None] * self._frame_count
         frame0 = self._video_source.read_rgb(0)
         if frame0 is None:
             raise RuntimeError("Failed to read first video frame")
-        processed, scale = self._preprocessor.resize_image(frame0)
-        self._apply_display_geometry(frame0, processed, scale)
-        self._frame_cache[0] = processed
+        self._finalize_open_session(self._preprocess_settings.apply(frame0))
 
     def set_image_paths(self, paths: List[str]) -> None:
         """Backward-compatible entry point for image sequences."""
         if self.get_session_key() == ("images", tuple(paths)):
             return
         self.open_images(paths)
+
+    def get_preprocess_settings(self) -> PreprocessSettings:
+        return self._preprocess_settings.copy()
+
+    def get_source_frame_count(self) -> int:
+        """Total frames in the opened media before clip."""
+        return self._source_frame_count
+
+    def get_full_frame_count(self) -> int:
+        return self._source_frame_count
+
+    def set_preprocess_settings(self, settings: PreprocessSettings) -> None:
+        """Apply preprocessing + clip; clears cache and refreshes geometry."""
+        self._preprocess_settings = settings.copy()
+        self._apply_clip_from_settings()
+        self.invalidate_frame_cache()
+        raw0 = self._read_rgb_raw(0)
+        if raw0 is not None:
+            self._finalize_open_session(self._preprocess_settings.apply(raw0))
+
+    def _apply_clip_from_settings(self) -> None:
+        """Trim exposed frame range to clip_start … clip_end."""
+        if self._source_frame_count <= 0:
+            self._frame_count = 0
+            return
+
+        start = max(
+            0, min(self._preprocess_settings.clip_start, self._source_frame_count - 1)
+        )
+        end = self._preprocess_settings.effective_clip_end(self._source_frame_count)
+        if end < start:
+            end = start
+
+        if self._media_kind == "images" and self._all_image_paths:
+            self._image_paths = self._all_image_paths[start : end + 1]
+            self._index_offset = 0
+        else:
+            self._index_offset = start
+
+        self._frame_count = end - start + 1
+        self._frame_masks = [None] * self._frame_count
+        self._current_frame_index = 0
+
+    def get_source_frame_size(self) -> Optional[Tuple[int, int]]:
+        """Full-resolution frame size before crop (height, width)."""
+        raw = self._read_rgb_raw(0)
+        if raw is None:
+            return None
+        return (raw.shape[0], raw.shape[1])
+
+    def _finalize_open_session(self, full_rgb: np.ndarray) -> None:
+        processed, scale = self._preprocessor.resize_image(full_rgb)
+        self._apply_display_geometry(full_rgb, processed, scale)
+        self._frame_cache[0] = processed
 
     def _apply_display_geometry(
         self, full_rgb: np.ndarray, processed_rgb: np.ndarray, scale: float
@@ -113,9 +175,13 @@ class StorageService:
         self._frame_cache[index] = processed
         return processed
 
-    def _read_rgb_full(self, index: int) -> Optional[np.ndarray]:
+    def _read_rgb_raw(self, index: int) -> Optional[np.ndarray]:
+        """Decode frame without user preprocessing (clip-relative index)."""
+        if not (0 <= index < self._frame_count):
+            return None
+        actual = index + self._index_offset
         if self._media_kind == "video" and self._video_source is not None:
-            return self._video_source.read_rgb(index)
+            return self._video_source.read_rgb(actual)
 
         if self._media_kind == "images" and 0 <= index < len(self._image_paths):
             image = cv2.imread(self._image_paths[index])
@@ -123,9 +189,31 @@ class StorageService:
                 return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         return None
 
+    def _read_rgb_full(self, index: int) -> Optional[np.ndarray]:
+        rgb = self._read_rgb_raw(index)
+        if rgb is None:
+            return None
+        return self._preprocess_settings.apply(rgb)
+
     def load_original_frame(self, index: int) -> Optional[np.ndarray]:
-        """Load full-resolution RGB frame."""
+        """Load full-resolution RGB frame with preprocessing applied."""
         return self._read_rgb_full(index)
+
+    def load_original_frame_raw(self, index: int) -> Optional[np.ndarray]:
+        """Load full-resolution RGB frame before preprocessing (clip-relative)."""
+        return self._read_rgb_raw(index)
+
+    def load_original_frame_raw_full(self, full_index: int) -> Optional[np.ndarray]:
+        """Load raw frame by absolute index (for preprocess UI / auto-adjust)."""
+        if full_index < 0 or full_index >= self._source_frame_count:
+            return None
+        if self._media_kind == "video" and self._video_source is not None:
+            return self._video_source.read_rgb(full_index)
+        if self._media_kind == "images" and 0 <= full_index < len(self._all_image_paths):
+            image = cv2.imread(self._all_image_paths[full_index])
+            if image is not None:
+                return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return None
 
     def get_frame_count(self) -> int:
         return self._frame_count
@@ -140,12 +228,16 @@ class StorageService:
 
         self._media_kind = None
         self._image_paths.clear()
+        self._all_image_paths.clear()
         self._frame_masks.clear()
         self._frame_cache.clear()
         self._frame_count = 0
+        self._source_frame_count = 0
+        self._index_offset = 0
         self._original_size = None
         self._processed_size = None
         self._current_frame_index = 0
+        self._preprocess_settings = PreprocessSettings()
         self._preprocessor.cleanup_temp_directory()
 
     def get_image_paths(self) -> List[str]:

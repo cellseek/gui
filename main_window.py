@@ -19,8 +19,16 @@ from PyQt6.QtWidgets import (
 )
 
 from services.cellsam_service import CellSamService
+from utils.frame_preprocess import PreprocessSettings
 from widgets.frame_by_frame_widget import FrameByFrameWidget
 from widgets.media_import_widget import MediaImportWidget
+from widgets.preprocess_widget import PreprocessWidget
+
+# Stacked widget screen indices
+IDX_IMPORT = 0
+IDX_PREPROCESS = 1
+IDX_TRACKING = 2
+IDX_EXPORT = 3
 
 
 class MainWindow(QMainWindow):
@@ -72,16 +80,20 @@ class MainWindow(QMainWindow):
         self.stacked_widget = QStackedWidget()
         main_layout.addWidget(self.stacked_widget)
 
-        # Screen 1: Media Import
+        # Screen 0: Media Import
         self.media_import_widget = MediaImportWidget()
         self.stacked_widget.addWidget(self.media_import_widget)
+
+        # Screen 1: Preprocess (crop / tone) before tracking
+        self.preprocess_widget = PreprocessWidget()
+        self.stacked_widget.addWidget(self.preprocess_widget)
 
         # Screen 2: Frame-by-Frame Processing
         self.frame_by_frame_widget = FrameByFrameWidget()
         self.stacked_widget.addWidget(self.frame_by_frame_widget)
         self.media_import_widget.frame_widget = self.frame_by_frame_widget
 
-        # Screen 3: Export Processing
+        # Screen 3: Export
         from widgets.export_widget import ExportWidget
 
         self.export_widget = ExportWidget(self.frame_by_frame_widget.storage_service)
@@ -111,6 +123,11 @@ class MainWindow(QMainWindow):
         self.media_import_widget.frames_ready.connect(self.on_frames_ready)
         self.media_import_widget.video_ready.connect(self.on_video_ready)
         self.media_import_widget.status_update.connect(self.on_status_update)
+
+        self.preprocess_widget.preprocess_confirmed.connect(
+            self.on_preprocess_confirmed
+        )
+        self.preprocess_widget.status_update.connect(self.on_status_update)
 
         # Frame-by-frame connections
         self.frame_by_frame_widget.status_update.connect(self.on_status_update)
@@ -176,7 +193,7 @@ class MainWindow(QMainWindow):
             self.show_error("Import Error", str(e))
             return
 
-        self._begin_tracking_session(auto_segment=self.media_import_widget.is_auto_segment_enabled())
+        self._show_preprocess_screen()
 
     def on_video_ready(self, video_path: str, frame_interval: int, frame_count: int):
         """Handle video import after metadata probe (frames decoded on demand)."""
@@ -188,9 +205,21 @@ class MainWindow(QMainWindow):
             return
 
         self.status_label.setText(
-            f"Video loaded: {frame_count} frames — decoding on demand"
+            f"Video loaded: {frame_count} frames — scrub to preview & preprocess"
         )
-        self._begin_tracking_session(auto_segment=self.media_import_widget.is_auto_segment_enabled())
+        self._show_preprocess_screen()
+
+    def _show_preprocess_screen(self) -> None:
+        storage = self.frame_by_frame_widget.storage_service
+        self.preprocess_widget.load_storage(storage)
+        self.stacked_widget.setCurrentIndex(IDX_PREPROCESS)
+
+    def on_preprocess_confirmed(self, settings: PreprocessSettings) -> None:
+        storage = self.frame_by_frame_widget.storage_service
+        storage.set_preprocess_settings(settings)
+        self._begin_tracking_session(
+            auto_segment=self.media_import_widget.is_auto_segment_enabled()
+        )
 
     def _begin_tracking_session(self, auto_segment: bool):
         if auto_segment:
@@ -217,14 +246,14 @@ class MainWindow(QMainWindow):
         empty_masks = np.zeros((h, w), dtype=np.uint16)
         self.frame_by_frame_widget.initialize(empty_masks)
         self.status_label.setText("Frames loaded without auto-segmentation")
-        self.stacked_widget.setCurrentIndex(1)
+        self.stacked_widget.setCurrentIndex(IDX_TRACKING)
 
     def _on_cellsam_complete(self, first_frame_masks: np.ndarray):
         """Handle successful CellSAM completion"""
         self._set_segmentation_wait_cursor(False)
         self.frame_by_frame_widget.initialize(first_frame_masks)
         self.status_label.setText("Frames loaded with CellSAM segmentation")
-        self.stacked_widget.setCurrentIndex(1)
+        self.stacked_widget.setCurrentIndex(IDX_TRACKING)
 
     def _on_cellsam_error(self, error_message: str):
         """Handle CellSAM error"""
@@ -241,29 +270,27 @@ class MainWindow(QMainWindow):
             h, w = 512, 512
         dummy_mask = np.zeros((h, w), dtype=np.uint16)
         self.frame_by_frame_widget.initialize(dummy_mask)
-        self.stacked_widget.setCurrentIndex(1)
+        self.stacked_widget.setCurrentIndex(IDX_TRACKING)
 
     def on_back_to_tracking(self):
         """Handle back to tracking navigation"""
-        self.stacked_widget.setCurrentIndex(1)
+        self.stacked_widget.setCurrentIndex(IDX_TRACKING)
 
     def on_restart_requested(self):
-        """Handle restart navigation - go back to media import"""
-        # Clear all state in frame by frame widget
-        self.frame_by_frame_widget.clear_all_data()
+        """Return to preprocess to adjust crop, trim, and tone; then re-enter tracking."""
+        storage = self.frame_by_frame_widget.storage_service
+        if storage.get_source_frame_count() <= 0:
+            return
 
-        # Clear any pending frame paths
-        if hasattr(self, "_pending_frame_paths"):
-            delattr(self, "_pending_frame_paths")
-
-        # Reset media import widget state
-        self.media_import_widget.reset_state()
-
-        # Switch back to import view
-        self.stacked_widget.setCurrentIndex(0)
-        self.status_label.setText("Ready - Import video or images to begin")
+        settings = storage.get_preprocess_settings()
+        self.frame_by_frame_widget.clear_tracking_state()
+        self.preprocess_widget.load_storage(storage, settings=settings)
+        self.stacked_widget.setCurrentIndex(IDX_PREPROCESS)
+        self.status_label.setText(
+            "Adjust crop and image settings, then continue to tracking"
+        )
 
     def show_export_view(self):
         """Show the export view"""
         self.export_widget.initialize()
-        self.stacked_widget.setCurrentIndex(2)
+        self.stacked_widget.setCurrentIndex(IDX_EXPORT)

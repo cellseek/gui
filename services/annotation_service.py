@@ -24,6 +24,7 @@ class AnnotationServiceDelegate(Protocol):
     ) -> None: ...
     def show_question_box(self, title: str, message: str) -> bool: ...
     def update_current_display_masks(self, masks: np.ndarray) -> None: ...
+    def begin_mask_edit(self) -> None: ...
 
 
 class AnnotationService:
@@ -64,6 +65,7 @@ class AnnotationService:
         if 0 <= y < current_masks.shape[0] and 0 <= x < current_masks.shape[1]:
             mask_id = current_masks[y, x]
             if mask_id > 0:
+                self.delegate.begin_mask_edit()
                 # Remove this mask
                 current_masks[current_masks == mask_id] = 0
                 current_index = self.delegate.get_current_frame_index()
@@ -109,6 +111,7 @@ class AnnotationService:
                     if not merge_cells:
                         return
 
+                self.delegate.begin_mask_edit()
                 # Update the cell ID
                 current_masks[current_masks == current_cell_id] = new_id
                 current_index = self.delegate.get_current_frame_index()
