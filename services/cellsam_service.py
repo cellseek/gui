@@ -47,10 +47,6 @@ class CellSamService(QObject):
 
     def _on_error_occurred(self, error_message: str) -> None:
         """Handle CellSAM processing errors"""
-        # Clean up worker
-        self._cellsam_worker = None
-
-        # Show error and update status
         self.segmentation_error.emit(error_message)
         self.status_update.emit("CellSAM processing failed")
 
@@ -59,15 +55,23 @@ class CellSamService(QObject):
         self.status_update.emit("CellSAM processing completed")
         self.segmentation_complete.emit(masks)
 
-    def segment_first_frame_async(self, first_frame_path: str) -> None:
-        """Start CellSAM segmentation asynchronously"""
+    def segment_first_frame_async(
+        self,
+        first_frame_path: str = None,
+        image_rgb: np.ndarray = None,
+    ) -> None:
+        """Start CellSAM segmentation asynchronously (path or in-memory RGB)."""
         if self._cellsam_worker.isRunning():
             self.status_update.emit("CellSAM is already processing...")
             return
 
+        if first_frame_path is None and image_rgb is None:
+            self._on_error_occurred("No frame provided for segmentation")
+            return
+
         try:
             self.status_update.emit("Starting CellSAM processing...")
-            self._cellsam_worker.run_async(first_frame_path)
+            self._cellsam_worker.run_async(first_frame_path, image_rgb)
         except Exception as e:
             self._on_error_occurred(f"Failed to start segmentation: {str(e)}")
 

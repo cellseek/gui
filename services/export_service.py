@@ -447,56 +447,6 @@ class ExportService(QObject):
             self.export_completed.emit(False, error_msg)
             return False
 
-    def export_to_json(
-        self, output_path: str, frame_range: Optional[Tuple[int, int]] = None
-    ) -> bool:
-        """Export tracking data to JSON file."""
-        try:
-            self.status_updated.emit("Extracting tracking data...")
-
-            # Get all tracking data
-            all_data = self.extract_all_tracking_data()
-
-            # Filter by frame range if specified
-            if frame_range:
-                start_frame, end_frame = frame_range
-                all_data = [
-                    d for d in all_data if start_frame <= d["frame_id"] <= end_frame
-                ]
-
-            if not all_data:
-                self.export_completed.emit(False, "No tracking data found to export")
-                return False
-
-            # Create output directory
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            # Organize data by frame and cell
-            organized_data = {
-                "metadata": {
-                    "total_frames": self.storage_service.get_frame_count(),
-                    "time_per_frame_minutes": self.TIME_PER_FRAME,
-                    "export_timestamp": str(Path(output_path).stem),
-                },
-                "tracking_data": all_data,
-            }
-
-            # Write JSON file
-            self.status_updated.emit("Writing JSON file...")
-            with open(output_path, "w", encoding="utf-8") as jsonfile:
-                json.dump(organized_data, jsonfile, indent=2)
-
-            self.progress_updated.emit(100)
-            self.export_completed.emit(
-                True, f"JSON exported successfully to {output_path}"
-            )
-            return True
-
-        except Exception as e:
-            error_msg = f"Failed to export JSON: {str(e)}"
-            self.export_completed.emit(False, error_msg)
-            return False
-
     def export_cell_summary_to_csv(
         self, output_path: str, frame_range: Optional[Tuple[int, int]] = None
     ) -> bool:

@@ -1,67 +1,64 @@
+from typing import Optional
+
 import numpy as np
 from cutie.cutie_tracker import CutieTracker
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
 class CutieWorker(QThread):
-    # Signals for async communication
-    result_ready = pyqtSignal(np.ndarray)  # predicted mask
-    error_occurred = pyqtSignal(str)  # error message
-    status_update = pyqtSignal(str)  # status message
+    result_ready = pyqtSignal(np.ndarray)
+    error_occurred = pyqtSignal(str)
+    status_update = pyqtSignal(str)
 
     def __init__(self):
-        """
-        Initialize CUTIE worker and model.
-        """
         super().__init__()
-
-        self._cancelled = False
-        self.tracker = None
-
-        # Task data for async operations
+        self._tracker: Optional[CutieTracker] = None
         self._previous_image = None
         self._previous_mask = None
         self._current_image = None
+        self._previous_index = 0
+        self._current_index = 1
 
-        # Initialize CUTIE tracker
-        self.tracker = CutieTracker()
+    def _ensure_tracker(self) -> CutieTracker:
+        if self._tracker is None:
+            self.status_update.emit("Loading CUTIE model...")
+            self._tracker = CutieTracker()
+        return self._tracker
+
+    def reset_tracker(self) -> None:
+        if self._tracker is not None:
+            self._tracker.reset()
 
     def track_async(
         self,
         previous_image: np.ndarray,
         previous_mask: np.ndarray,
         current_image: np.ndarray,
+        previous_index: int,
+        current_index: int,
     ) -> None:
-        """
-        Start tracking asynchronously.
-
-        Args:
-            previous_image: Previous frame image
-            previous_mask: Previous frame mask
-            current_image: Current frame image
-        """
         if self.isRunning():
-            return  # Already running
+            return
 
-        # Store task data
-        self._previous_image = previous_image.copy()
-        self._previous_mask = previous_mask.copy()
-        self._current_image = current_image.copy()
-
+        self._previous_image = previous_image
+        self._previous_mask = previous_mask
+        self._current_image = current_image
+        self._previous_index = previous_index
+        self._current_index = current_index
         self.start()
 
     def run(self):
-        """Main thread execution method."""
         try:
             self.status_update.emit("Running CUTIE tracking...")
-
-            # Use the new track method that handles both steps internally
-            predicted_mask = self.tracker.track(
-                self._previous_image, self._previous_mask, self._current_image
+            tracker = self._ensure_tracker()
+            predicted_mask = tracker.track(
+                self._previous_image,
+                self._previous_mask,
+                self._current_image,
+                previous_index=self._previous_index,
+                current_index=self._current_index,
             )
-
             self.result_ready.emit(predicted_mask)
-
         except Exception as e:
             self.error_occurred.emit(str(e))
 
@@ -70,22 +67,14 @@ class CutieWorker(QThread):
         previous_image: np.ndarray,
         previous_mask: np.ndarray,
         current_image: np.ndarray,
+        previous_index: int = 0,
+        current_index: int = 1,
     ) -> np.ndarray:
-        """
-        Perform a single tracking step with CUTIE (legacy synchronous method).
-
-        Args:
-            previous_image: Previous frame image
-            previous_mask: Previous frame mask
-            current_image: Current frame image
-
-        Returns:
-            Predicted mask for current frame
-        """
-
-        # Use the new track method that handles both steps internally
-        predicted_mask = self.tracker.track(
-            previous_image, previous_mask, current_image
+        tracker = self._ensure_tracker()
+        return tracker.track(
+            previous_image,
+            previous_mask,
+            current_image,
+            previous_index=previous_index,
+            current_index=current_index,
         )
-
-        return predicted_mask

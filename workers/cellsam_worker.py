@@ -3,65 +3,84 @@ import numpy as np
 from cellsam import CellSAM
 from PyQt6.QtCore import QThread, pyqtSignal
 
+# Matches display/tracking resolution (ImagePreprocessor max_size).
+SEGMENTATION_MAX_DIM = 512
+INFERENCE_BATCH_SIZE = 16
+
 
 class CellSamWorker(QThread):
-    # Signals for async communication
-    result_ready = pyqtSignal(np.ndarray)  # masks
-    error_occurred = pyqtSignal(str)  # error message
-    status_update = pyqtSignal(str)  # status message
+    result_ready = pyqtSignal(np.ndarray)
+    error_occurred = pyqtSignal(str)
+    status_update = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
-        self._model = CellSAM(gpu=True)
+        self._model = None
         self._current_frame_path = None
+        self._current_image = None
 
-    def run_async(self, first_frame_path: str):
-        """Start CellSAM processing asynchronously"""
+    def _ensure_model(self) -> CellSAM:
+        if self._model is None:
+            self.status_update.emit("Loading CellSAM model...")
+            self._model = CellSAM(gpu=True)
+        return self._model
+
+    def run_async(self, first_frame_path: str = None, image_rgb: np.ndarray = None):
         if self.isRunning():
-            return  # Already running
+            return
 
         self._current_frame_path = first_frame_path
+        self._current_image = image_rgb
         self.start()
 
-    def run(self, first_frame_path=None):
-        """Run CellSAM processing - can be called directly or as QThread.run()"""
+    def run(self, first_frame_path=None, image_rgb=None):
         if first_frame_path is None:
             first_frame_path = self._current_frame_path
+        if image_rgb is None:
+            image_rgb = self._current_image
 
-        if first_frame_path is None:
-            self.error_occurred.emit("No frame path provided")
+        if first_frame_path is None and image_rgb is None:
+            self.error_occurred.emit("No frame provided for segmentation")
             return None
 
         try:
             self.status_update.emit("Loading first frame...")
 
-            # Load and process first frame
-            img = cv2.imread(first_frame_path)
-            if img is None:
-                raise RuntimeError(f"Failed to load first frame: {first_frame_path}")
+            if image_rgb is not None:
+                img = np.ascontiguousarray(image_rgb)
+            else:
+                loaded = cv2.imread(first_frame_path)
+                if loaded is None:
+                    raise RuntimeError(f"Failed to load first frame: {first_frame_path}")
+                img = cv2.cvtColor(loaded, cv2.COLOR_BGR2RGB)
 
-            # Convert BGR to RGB
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            height, width = img.shape[:2]
+            max_dim = max(height, width)
+            if max_dim > SEGMENTATION_MAX_DIM:
+                scale = SEGMENTATION_MAX_DIM / float(max_dim)
+                new_w = int(round(width * scale))
+                new_h = int(round(height * scale))
+                img = cv2.resize(
+                    img, (new_w, new_h), interpolation=cv2.INTER_AREA
+                )
 
             self.status_update.emit("Running CellSAM segmentation...")
 
-            # Run segmentation on first frame
-            masks, flows, styles = self._model.segment(img, diameter=None)
+            model = self._ensure_model()
+            masks, _, _ = model.segment(
+                img,
+                diameter=None,
+                normalize=True,
+                tile_overlap=0.1,
+                augment=False,
+                batch_size=INFERENCE_BATCH_SIZE,
+            )
 
-            # If running in thread mode, emit signal
             if hasattr(self, "result_ready"):
                 self.result_ready.emit(masks)
-                return
-            else:
-                # Legacy mode for synchronous calls
-                result = {
-                    "frame_path": first_frame_path,
-                    "masks": masks,
-                    "flows": flows,
-                    "styles": styles,
-                    "original_image": img,
-                }
-                return result
+                return None
+
+            return {"frame_path": first_frame_path, "masks": masks}
 
         except Exception as e:
             if hasattr(self, "error_occurred"):
@@ -70,4 +89,4 @@ class CellSamWorker(QThread):
                 raise
 
     def cleanup(self):
-        del self._model
+        self._model = None

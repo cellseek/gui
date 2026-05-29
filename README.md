@@ -81,7 +81,7 @@ pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
 - Use the Frame Manager tab
 - Drag and drop image files or video frames
 - Frames will be automatically sorted and displayed as thumbnails
-- Supported formats: PNG, JPEG, TIFF, BMP
+- Supported formats: PNG, JPEG, TIFF, BMP, GIF; video: MP4, AVI, MOV, MKV, WMV, WEBM
 
 ### 3. Cell Segmentation
 

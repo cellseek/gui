@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QKeySequence, QResizeEvent, QShortcut, QShowEvent
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -26,9 +26,11 @@ from PyQt6.QtWidgets import (
 )
 
 from services.annotation_service import AnnotationService
+from services.cell_track_service import CellTrackService
 from services.cutie_service import CutieService
 from services.sam_service import SamService
 from services.storage_service import StorageService
+from widgets.cell_sidebar_widget import CellSidebarWidget
 from widgets.interactive_frame_widget import AnnotationMode, InteractiveFrameWidget
 
 
@@ -48,12 +50,13 @@ class FrameByFrameWidget(QWidget):
         self.annotation_service = AnnotationService(self)
         self.sam_service = SamService(self)
         self.cutie_service = CutieService()
-
-        # Models will be initialized later via initialize_models()
-        self._models_initialized = False
+        self.cell_track_service = CellTrackService()
 
         # Track pending async operations
         self._pending_frame_index = None
+        self._selected_cell_id: Optional[int] = None
+        self._syncing_view = False
+        self.frames_splitter: Optional[QSplitter] = None
 
         # Setup UI
         self.setup_ui()
@@ -294,6 +297,22 @@ class FrameByFrameWidget(QWidget):
         self.show_cell_ids_checkbox.toggled.connect(self.on_cell_id_toggle_changed)
         controls_layout.addWidget(self.show_cell_ids_checkbox)
 
+        controls_layout.addSpacing(16)
+
+        label_size_label = QLabel("Label Size:")
+        controls_layout.addWidget(label_size_label)
+
+        self.label_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.label_size_slider.setRange(50, 200)
+        self.label_size_slider.setValue(100)
+        self.label_size_slider.setFixedWidth(100)
+        self.label_size_slider.valueChanged.connect(self.on_label_size_changed)
+        controls_layout.addWidget(self.label_size_slider)
+
+        self.label_size_value_label = QLabel("100%")
+        self.label_size_value_label.setFixedWidth(40)
+        controls_layout.addWidget(self.label_size_value_label)
+
         controls_layout.addStretch()
 
         main_layout.addLayout(controls_layout)
@@ -301,38 +320,39 @@ class FrameByFrameWidget(QWidget):
         parent_layout.addWidget(merged_group)
 
     def setup_image_panel(self, parent_layout):
-        """Setup dual image display"""
-        image_group = QGroupBox("Current Frame vs Previous Frame")
+        """Setup dual image display with cell sidebar."""
+        image_group = QGroupBox("Frames & Cells")
         layout = QHBoxLayout(image_group)
 
-        # Set size policy to expand and take all remaining vertical space
         image_group.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-        # Create splitter for resizable panels
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        layout.addWidget(splitter)
+        outer_splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.addWidget(outer_splitter)
 
-        # Previous frame panel
+        self.frames_splitter = QSplitter(Qt.Orientation.Horizontal)
+
         prev_panel = QWidget()
         prev_layout = QVBoxLayout(prev_panel)
+        prev_layout.setContentsMargins(0, 0, 0, 0)
         prev_layout.addWidget(QLabel("Previous Frame:"))
         self.prev_image_label = InteractiveFrameWidget()
-        # Keep it enabled but set to VIEW mode to make it non-interactive
         self.prev_image_label.set_annotation_mode(AnnotationMode.VIEW)
 
         size_policy = QSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self.prev_image_label.setSizePolicy(size_policy)
-        prev_layout.addWidget(self.prev_image_label)
-        splitter.addWidget(prev_panel)
+        prev_layout.addWidget(self.prev_image_label, stretch=1)
+        self.frames_splitter.addWidget(prev_panel)
 
-        # Current frame panel
         curr_panel = QWidget()
         curr_layout = QVBoxLayout(curr_panel)
-        curr_layout.addWidget(QLabel("Current Frame:"))
+        curr_layout.setContentsMargins(0, 0, 0, 0)
+        curr_layout.addWidget(
+            QLabel("Current Frame (View: drag to pan, click to select cell):")
+        )
         self.curr_image_label = InteractiveFrameWidget()
         self.curr_image_label.point_clicked.connect(self.sam_service.on_point_clicked)
         self.curr_image_label.box_drawn.connect(self.sam_service.on_box_drawn)
@@ -342,20 +362,29 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label.cell_id_edit_requested.connect(
             self.annotation_service.on_cell_id_edit_requested
         )
-        # Make both image displays expand to fill available space equally
+        self.curr_image_label.cell_picked.connect(self.on_cell_picked_on_canvas)
         self.curr_image_label.setSizePolicy(size_policy)
-        curr_layout.addWidget(self.curr_image_label)
-        splitter.addWidget(curr_panel)
+        curr_layout.addWidget(self.curr_image_label, stretch=1)
+        self.frames_splitter.addWidget(curr_panel)
 
-        # Set equal proportional sizes (50% each)
-        splitter.setStretchFactor(0, 1)  # Previous panel
-        splitter.setStretchFactor(1, 1)  # Current panel
+        self.frames_splitter.setStretchFactor(0, 1)
+        self.frames_splitter.setStretchFactor(1, 1)
+        self.frames_splitter.setChildrenCollapsible(False)
+        self.prev_image_label.view_changed.connect(self._on_prev_view_changed)
+        self.curr_image_label.view_changed.connect(self._on_curr_view_changed)
 
-        # Ensure both panels start with equal sizes
-        splitter.setSizes([1, 1])  # Equal proportions
+        outer_splitter.addWidget(self.frames_splitter)
 
-        # Add with stretch factor to make it expand in the parent layout
-        parent_layout.addWidget(image_group, 1)  # stretch factor of 1
+        self.cell_sidebar = CellSidebarWidget()
+        self.cell_sidebar.jump_to_frame.connect(self.on_sidebar_jump_to_frame)
+        self.cell_sidebar.solo_mode_changed.connect(self._apply_cell_highlighting)
+        outer_splitter.addWidget(self.cell_sidebar)
+
+        outer_splitter.setStretchFactor(0, 4)
+        outer_splitter.setStretchFactor(1, 1)
+        outer_splitter.setSizes([900, 280])
+
+        parent_layout.addWidget(image_group, 1)
 
     def setup_shortcuts(self):
         """Setup keyboard shortcuts"""
@@ -393,6 +422,92 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label.set_show_cell_ids(checked)
         self.prev_image_label.set_show_cell_ids(checked)
 
+    def on_label_size_changed(self, value: int):
+        """Handle label size slider change."""
+        self.label_size_value_label.setText(f"{value}%")
+        scale = value / 100.0
+        self.curr_image_label.set_cell_id_scale(scale)
+        self.prev_image_label.set_cell_id_scale(scale)
+
+    def on_cell_picked_on_canvas(self, cell_id: int):
+        self._selected_cell_id = cell_id
+        self.refresh_cell_inspector()
+        self._apply_cell_highlighting()
+
+    def on_sidebar_jump_to_frame(self, frame_index: int):
+        if 0 <= frame_index < self.storage_service.get_frame_count():
+            self.storage_service.set_current_frame_index(frame_index)
+            self.update_display()
+
+    def refresh_cell_inspector(self):
+        """Update inspector for the selected cell, if any."""
+        if (
+            self.storage_service.get_frame_count() == 0
+            or self._selected_cell_id is None
+        ):
+            self.cell_sidebar.clear()
+            return
+
+        current = self.storage_service.get_current_frame_index()
+        detail = self.cell_track_service.analyze_cell(
+            self.storage_service.get_mask_for_frame,
+            self.storage_service.get_frame_count(),
+            current,
+            self._selected_cell_id,
+        )
+        if detail is None:
+            self._selected_cell_id = None
+            self.cell_sidebar.clear()
+            self._apply_cell_highlighting()
+            return
+        self.cell_sidebar.show_cell(detail)
+
+    def _on_prev_view_changed(self, zoom: float, pan_x: float, pan_y: float):
+        self._sync_view_to(self.curr_image_label, zoom, pan_x, pan_y)
+
+    def _on_curr_view_changed(self, zoom: float, pan_x: float, pan_y: float):
+        self._sync_view_to(self.prev_image_label, zoom, pan_x, pan_y)
+
+    def _sync_view_to(
+        self,
+        target: InteractiveFrameWidget,
+        zoom: float,
+        pan_x: float,
+        pan_y: float,
+    ) -> None:
+        if self._syncing_view or target.image is None:
+            return
+        self._syncing_view = True
+        target.apply_view_state(zoom, (pan_x, pan_y))
+        self._syncing_view = False
+
+    def _equalize_frame_panels(self) -> None:
+        if self.frames_splitter is None:
+            return
+        total = self.frames_splitter.width()
+        if total <= 0:
+            return
+        half = max(total // 2, 1)
+        self.frames_splitter.setSizes([half, half])
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self._equalize_frame_panels)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._equalize_frame_panels()
+
+    def _apply_cell_highlighting(self):
+        highlight = self._selected_cell_id
+        solo = (
+            self._selected_cell_id
+            if self.cell_sidebar.solo_checkbox.isChecked()
+            else None
+        )
+        self.curr_image_label.set_highlight_cell_id(highlight)
+        self.curr_image_label.set_solo_cell_id(solo)
+
     def on_export_requested(self):
         """Handle export button click"""
         self.export_requested.emit()
@@ -406,12 +521,13 @@ class FrameByFrameWidget(QWidget):
         # Clear storage service data
         self.storage_service.clear_all_data()
 
-        # Reset widget state
-        self._models_initialized = False
+        self.cutie_service.reset_tracker()
 
         # Clear interactive widget state
         self.curr_image_label.clear_all_state()
         self.prev_image_label.clear_all_state()
+        self.cell_sidebar.clear()
+        self._selected_cell_id = None
 
         # Reset UI elements
         self.frame_info_label.setText("No frames loaded")
@@ -422,40 +538,13 @@ class FrameByFrameWidget(QWidget):
     # ---------------------------- Initialization ---------------------------- #
     # ------------------------------------------------------------------------ #
 
-    def initialize(self, image_paths: List[str], first_frame_mask: np.ndarray):
-        """Load frames with first frame segmentation for tracking"""
-        # Only clear data if we're loading different images
-        if (
-            not hasattr(self.storage_service, "_image_paths")
-            or self.storage_service._image_paths != image_paths
-        ):
-            self.storage_service.clear_all_data()
-
-        # Set image paths for lazy loading
-        self.storage_service.set_image_paths(image_paths)
-
-        # Extract first frame masks
+    def initialize(self, first_frame_mask: np.ndarray):
+        """Apply first-frame masks; media must already be opened in storage."""
         self.storage_service.set_mask_for_frame(0, first_frame_mask.astype(np.uint16))
-
+        self.cutie_service.reset_tracker()
         self.storage_service.set_current_frame_index(0)
         self.update_display()
-
-    def initialize_models(self):
-        """Initialize SAM and CUTIE models for tracking"""
-        if self._models_initialized:
-            return
-
-        # Initialize SAM worker
-        if self.sam_service.sam_worker is None:
-            raise RuntimeError("Failed to initialize SAM model")
-
-        self.status_update.emit("Loading CUTIE model...")
-        # Initialize CUTIE worker
-        if self.cutie_service.cutie_worker is None:
-            raise RuntimeError("Failed to initialize CUTIE model")
-
-        self._models_initialized = True
-        self.status_update.emit("CUTIE model loaded successfully")
+        self.refresh_cell_inspector()
 
     # ------------------------------------------------------------------------ #
     # -------------------------------- Display ------------------------------- #
@@ -507,6 +596,10 @@ class FrameByFrameWidget(QWidget):
             self.prev_image_label.clear()
             self.prev_image_label.setText("First Frame")
 
+        self.refresh_cell_inspector()
+        self._apply_cell_highlighting()
+        self._equalize_frame_panels()
+
     def previous_frame(self):
         """Go to previous frame"""
         # Don't allow navigation when CUTIE is running
@@ -542,9 +635,12 @@ class FrameByFrameWidget(QWidget):
                 previous_mask = self.storage_service.get_mask_for_frame(current_index)
                 current_image = self.storage_service.get_frame(next_index)
 
-                # Run CUTIE tracking asynchronously
                 self.cutie_service.track_async(
-                    previous_image, previous_mask, current_image
+                    previous_image,
+                    previous_mask,
+                    current_image,
+                    current_index,
+                    next_index,
                 )
             else:
                 # Just move to next frame (already has mask or is first frame)
@@ -601,6 +697,7 @@ class FrameByFrameWidget(QWidget):
     def set_mask_for_frame(self, frame_index: int, masks: np.ndarray) -> None:
         """Delegate for annotation service"""
         self.storage_service.set_mask_for_frame(frame_index, masks)
+        self.cutie_service.reset_tracker()
 
     def get_current_frame_index(self) -> int:
         """Delegate for annotation service"""
@@ -642,6 +739,8 @@ class FrameByFrameWidget(QWidget):
     def update_current_display_masks(self, masks: np.ndarray) -> None:
         """Delegate for annotation service"""
         self.curr_image_label.set_masks(masks)
+        self.refresh_cell_inspector()
+        self._apply_cell_highlighting()
 
     def get_current_frame(self) -> Optional[np.ndarray]:
         """Delegate for SAM service"""

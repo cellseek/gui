@@ -3,163 +3,151 @@ Image import widget with drag and drop support
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import cv2
 from natsort import natsorted
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
+from services.storage_service import DEFAULT_VIDEO_FRAME_INTERVAL
+from utils.media_formats import VIDEO_EXTENSIONS, media_files_dialog_filter
 from widgets.dropzone_widget import DropZoneWidget
+from workers.video_import_worker import VideoImportWorker
 
 
 class MediaImportWidget(QWidget):
-    """Widget for importing image files"""
+    """Widget for importing image files and videos (lazy video loading)."""
 
-    # Signals
-    frames_ready = pyqtSignal(list)  # list of frame paths
-    status_update = pyqtSignal(str)  # status message
-    auto_segment_toggled = pyqtSignal(bool)  # auto-segmentation enabled/disabled
+    frames_ready = pyqtSignal(list)
+    video_ready = pyqtSignal(str, int, int)  # path, frame_interval, logical_frame_count
+    status_update = pyqtSignal(str)
+    auto_segment_toggled = pyqtSignal(bool)
 
     def __init__(self):
         super().__init__()
-
-        # Setup UI
+        self._video_import_worker: Optional[VideoImportWorker] = None
         self.setup_ui()
 
     def setup_ui(self):
-        """Setup the user interface"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 32, 32, 32)
         layout.setSpacing(8)
 
-        # Auto-segmentation toggle
         self.auto_segment_checkbox = QCheckBox("Auto-segment first frame with CellSAM")
-        self.auto_segment_checkbox.setChecked(True)  # Default to enabled
+        self.auto_segment_checkbox.setChecked(True)
         self.auto_segment_checkbox.toggled.connect(self.auto_segment_toggled.emit)
         layout.addWidget(self.auto_segment_checkbox)
 
-        # Drop zone with upload button
         self.drop_zone = DropZoneWidget()
         self.drop_zone.files_dropped.connect(self.handle_dropped_files)
         self.drop_zone.upload_clicked.connect(self.handle_upload_button)
         layout.addWidget(self.drop_zone)
 
     def handle_upload_button(self):
-        """Handle upload button click - show file dialog"""
-        # Show file dialog that accepts image files
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Select Image Files",
+            "Select Media Files",
             "",
-            "Media Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif *.mp4);;All Files (*)",
+            media_files_dialog_filter(),
         )
-
         if file_paths:
             self.process_files(file_paths)
-
-    def select_image_files(self):
-        """Open file dialog to select multiple image files"""
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Image Files",
-            "",
-            "Image Files (*.png *.jpg *.jpeg *.tiff *.tif *.bmp *.gif);;All Files (*)",
-        )
-
-        if file_paths:
-            self.process_files(file_paths)
-
-    def extract_frames_from_video(self, video_path, frame_interval=50):
-        """Extract every Nth frame from MP4 video and save as images"""
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return []
-
-        temp_dir = Path("temp_frames")
-        temp_dir.mkdir(exist_ok=True)
-        frame_paths = []
-        index = 0
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            if index % frame_interval == 0:
-                frame_path = temp_dir / f"frame_{index:04d}.png"
-                cv2.imwrite(str(frame_path), frame)
-                frame_paths.append(str(frame_path))
-
-            index += 1
-
-        cap.release()
-        return frame_paths
 
     def handle_dropped_files(self, file_paths: List[str]):
-        """Handle files dropped on the drop zone"""
         if file_paths:
             self.process_files(file_paths)
 
-    def process_files(self, file_paths):
-        """Process image and video files"""
-        valid_paths = []
+    def process_files(self, file_paths: List[str]):
+        videos = []
+        image_paths = []
 
         for file_path in file_paths:
             ext = Path(file_path).suffix.lower()
+            if ext in VIDEO_EXTENSIONS:
+                videos.append(file_path)
+            else:
+                image_paths.append(file_path)
 
-            if ext == ".mp4":
-                # Extract video frames
-                video_frames = self.extract_frames_from_video(
-                    file_path, frame_interval=1
-                )
-                if video_frames:
-                    valid_paths.extend(video_frames)
+        if len(videos) > 1:
+            QMessageBox.warning(
+                self,
+                "Multiple Videos",
+                "Please drop one video at a time.",
+            )
+            videos = videos[:1]
+
+        if videos:
+            self._start_video_import(videos[0])
+
+        if image_paths:
+            self._finish_image_import(image_paths)
+
+        if not videos and not image_paths:
+            QMessageBox.warning(
+                self, "No Valid Media", "No valid image or video files found"
+            )
+
+    def _start_video_import(self, video_path: str):
+        if self._video_import_worker is not None and self._video_import_worker.isRunning():
+            return
+
+        self.status_update.emit("Opening video...")
+        self.drop_zone.setEnabled(False)
+
+        self._video_import_worker = VideoImportWorker(
+            video_path, DEFAULT_VIDEO_FRAME_INTERVAL
+        )
+        self._video_import_worker.finished.connect(self._on_video_probe_finished)
+        self._video_import_worker.error_occurred.connect(self._on_video_probe_error)
+        self._video_import_worker.start()
+
+    def _on_video_probe_finished(self, video_path: str, frame_interval: int, frame_count: int):
+        self.drop_zone.setEnabled(True)
+        self.video_ready.emit(video_path, frame_interval, frame_count)
+        self.status_update.emit(
+            f"Video ready: {frame_count} frames (every {frame_interval} video frames)"
+        )
+
+    def _on_video_probe_error(self, message: str):
+        self.drop_zone.setEnabled(True)
+        QMessageBox.warning(
+            self,
+            "Video Error",
+            f"Could not open video.\n{message}\n\n"
+            "Try re-encoding to H.264 MP4 or MJPEG AVI.",
+        )
+        self.status_update.emit("Ready - Import video or images to begin")
+
+    def _finish_image_import(self, file_paths: List[str]):
+        valid_paths = []
+
+        for file_path in file_paths:
+            try:
+                img = cv2.imread(file_path)
+                if img is not None:
+                    valid_paths.append(file_path)
                 else:
                     QMessageBox.warning(
                         self,
-                        "Video Error",
-                        f"Failed to extract frames from: {Path(file_path).name}",
+                        "Invalid Image",
+                        f"Could not read image: {Path(file_path).name}",
                     )
-            else:
-                try:
-                    img = cv2.imread(file_path)
-                    if img is not None:
-                        valid_paths.append(file_path)
-                    else:
-                        QMessageBox.warning(
-                            self,
-                            "Invalid Image",
-                            f"Could not read image: {Path(file_path).name}",
-                        )
-                except Exception as e:
-                    QMessageBox.warning(
-                        self,
-                        "Image Error",
-                        f"Error reading {Path(file_path).name}: {str(e)}",
-                    )
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Image Error",
+                    f"Error reading {Path(file_path).name}: {str(e)}",
+                )
 
         if valid_paths:
             sorted_paths = natsorted(valid_paths)
-            # Emit frames ready with current auto-segment setting
             self.frames_ready.emit(sorted_paths)
-            self.status_update.emit(f"Loaded {len(sorted_paths)} frames")
-        else:
-            QMessageBox.warning(
-                self, "No Valid Media", "No valid image or video frames found"
-            )
+            self.status_update.emit(f"Loaded {len(sorted_paths)} images")
 
     def is_auto_segment_enabled(self) -> bool:
-        """Get current state of auto-segmentation toggle"""
         return self.auto_segment_checkbox.isChecked()
 
     def reset_state(self):
-        """Reset internal state after restart"""
-        # Clear any cached paths or data
         self.status_update.emit("Ready - Import video or images to begin")
-
-        # Optionally clear temp_frames folder
-        temp_dir = Path("temp_frames")
-        if temp_dir.exists():
-            for file in temp_dir.glob("*.png"):
-                file.unlink()
+        self.drop_zone.setEnabled(True)

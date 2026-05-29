@@ -4,6 +4,12 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QFont
 from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
+from utils.media_formats import (
+    IMAGE_EXTENSIONS,
+    SUPPORTED_FORMATS_LABEL,
+    VIDEO_EXTENSIONS,
+)
+
 
 class DropZoneWidget(QWidget):
     """Drop zone with integrated upload button"""
@@ -35,7 +41,7 @@ class DropZoneWidget(QWidget):
 
         # Drop zone icon and text
         self.drop_label = QLabel(
-            "Drop video or image files here\n\nSupported formats: MP4, AVI, MOV, PNG, JPG, TIFF"
+            f"Drop video or image files here\n\n{SUPPORTED_FORMATS_LABEL}"
         )
         self.drop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.drop_label.setWordWrap(True)
@@ -165,12 +171,7 @@ class DropZoneWidget(QWidget):
         """Check if file is valid image or video"""
         ext = Path(file_path).suffix.lower()
 
-        # Image extensions
-        image_exts = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".gif"}
-        # Video extensions
-        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
-
-        return ext in image_exts or ext in video_exts
+        return ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS
 
     def reset_state(self):
         """Reset widget state"""

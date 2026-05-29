@@ -6,8 +6,9 @@ from typing import List
 
 import numpy as np
 import psutil
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
+    QApplication,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -108,6 +109,7 @@ class MainWindow(QMainWindow):
         """Setup signal connections between components"""
         # Media import connections
         self.media_import_widget.frames_ready.connect(self.on_frames_ready)
+        self.media_import_widget.video_ready.connect(self.on_video_ready)
         self.media_import_widget.status_update.connect(self.on_status_update)
 
         # Frame-by-frame connections
@@ -159,101 +161,87 @@ class MainWindow(QMainWindow):
         """Handle status updates"""
         self.status_label.setText(message)
 
-    def on_frames_ready(self, frame_paths: List[str]):
-        """Handle frames ready from media import - conditionally run CellSAM processing"""
-
-        # First, preprocess the frames by setting them in storage service
-        # This will trigger the image preprocessing (resizing) internally
-        self.frame_by_frame_widget.storage_service.set_image_paths(frame_paths)
-
-        # Store frame paths for later use
-        self._pending_frame_paths = frame_paths
-
-        # Check if auto-segmentation is enabled
-        if self.media_import_widget.is_auto_segment_enabled():
-            # Get the processed path for the first frame
-            first_frame_processed_path = (
-                self.frame_by_frame_widget.storage_service.get_processed_path(0)
-            )
-            if first_frame_processed_path is None:
-                # Fallback to original path if preprocessing failed
-                first_frame_processed_path = frame_paths[0]
-
-            # Run CellSAM on the processed first frame asynchronously
-            self.cellsam_service.segment_first_frame_async(first_frame_processed_path)
+    def _set_segmentation_wait_cursor(self, waiting: bool) -> None:
+        if waiting:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         else:
-            # Skip auto-segmentation, initialize directly without masks
-            self._initialize_without_segmentation(frame_paths)
+            QApplication.restoreOverrideCursor()
 
-    def _initialize_without_segmentation(self, frame_paths: List[str]):
+    def on_frames_ready(self, frame_paths: List[str]):
+        """Handle image sequence import (lazy per-frame loading)."""
+        storage = self.frame_by_frame_widget.storage_service
+        try:
+            storage.open_images(frame_paths)
+        except Exception as e:
+            self.show_error("Import Error", str(e))
+            return
+
+        self._begin_tracking_session(auto_segment=self.media_import_widget.is_auto_segment_enabled())
+
+    def on_video_ready(self, video_path: str, frame_interval: int, frame_count: int):
+        """Handle video import after metadata probe (frames decoded on demand)."""
+        storage = self.frame_by_frame_widget.storage_service
+        try:
+            storage.open_video(video_path, frame_interval)
+        except Exception as e:
+            self.show_error("Import Error", str(e))
+            return
+
+        self.status_label.setText(
+            f"Video loaded: {frame_count} frames — decoding on demand"
+        )
+        self._begin_tracking_session(auto_segment=self.media_import_widget.is_auto_segment_enabled())
+
+    def _begin_tracking_session(self, auto_segment: bool):
+        if auto_segment:
+            storage = self.frame_by_frame_widget.storage_service
+            first_frame = storage.get_frame(0)
+            if first_frame is None:
+                self.show_error("Import Error", "Failed to load first frame")
+                return
+
+            self.status_label.setText("Segmenting first frame...")
+            self._set_segmentation_wait_cursor(True)
+            self.cellsam_service.segment_first_frame_async(image_rgb=first_frame)
+        else:
+            self._initialize_without_segmentation()
+
+    def _initialize_without_segmentation(self):
         """Initialize frame-by-frame widget without auto-segmentation"""
-        # Get the first frame to create empty masks with correct dimensions
         first_frame = self.frame_by_frame_widget.storage_service.get_frame(0)
         if first_frame is None:
-            # Fallback to loading original first frame
-            import cv2
-            first_frame = cv2.imread(frame_paths[0])
-            first_frame = cv2.cvtColor(first_frame, cv2.COLOR_BGR2RGB)
-        
-        # Create empty mask with same dimensions as first frame
+            self.show_error("Import Error", "Failed to load first frame")
+            return
+
         h, w = first_frame.shape[:2]
         empty_masks = np.zeros((h, w), dtype=np.uint16)
-        
-        # Initialize with empty masks
-        self.frame_by_frame_widget.initialize(frame_paths, empty_masks)
+        self.frame_by_frame_widget.initialize(empty_masks)
         self.status_label.setText("Frames loaded without auto-segmentation")
-        
-        # Switch to frame-by-frame view
         self.stacked_widget.setCurrentIndex(1)
-        
-        # Initialize models
-        self.frame_by_frame_widget.initialize_models()
-        
-        # Clean up
-        if hasattr(self, "_pending_frame_paths"):
-            delattr(self, "_pending_frame_paths")
 
     def _on_cellsam_complete(self, first_frame_masks: np.ndarray):
         """Handle successful CellSAM completion"""
-        if hasattr(self, "_pending_frame_paths"):
-            # Initialize with CellSAM results
-            # Note: masks are kept at processed size to match displayed images
-            self.frame_by_frame_widget.initialize(
-                self._pending_frame_paths, first_frame_masks
-            )
-            self.status_label.setText("Frames loaded with CellSAM segmentation")
-
-            # Switch to frame-by-frame view
-            self.stacked_widget.setCurrentIndex(1)
-
-            # Initialize models
-            self.frame_by_frame_widget.initialize_models()
-
-            # Clean up
-            delattr(self, "_pending_frame_paths")
+        self._set_segmentation_wait_cursor(False)
+        self.frame_by_frame_widget.initialize(first_frame_masks)
+        self.status_label.setText("Frames loaded with CellSAM segmentation")
+        self.stacked_widget.setCurrentIndex(1)
 
     def _on_cellsam_error(self, error_message: str):
         """Handle CellSAM error"""
-        if hasattr(self, "_pending_frame_paths"):
-            # CellSAM failed, show error but still allow manual annotation
-            self.show_error(
-                "CellSAM Error",
-                f"Failed to segment first frame: {error_message}. You can manually annotate the first frame.",
-            )
-            # Create a dummy mask for initialization
-            dummy_mask = np.zeros(
-                (512, 512), dtype=np.uint16
-            )  # Will be resized by initialize
-            self.frame_by_frame_widget.initialize(self._pending_frame_paths, dummy_mask)
-
-            # Switch to frame-by-frame view
-            self.stacked_widget.setCurrentIndex(1)
-
-            # Initialize models
-            self.frame_by_frame_widget.initialize_models()
-
-            # Clean up
-            delattr(self, "_pending_frame_paths")
+        self._set_segmentation_wait_cursor(False)
+        self.show_error(
+            "CellSAM Error",
+            f"Failed to segment first frame: {error_message}. "
+            "You can manually annotate the first frame.",
+        )
+        first_frame = self.frame_by_frame_widget.storage_service.get_frame(0)
+        if first_frame is not None:
+            h, w = first_frame.shape[:2]
+        else:
+            h, w = 512, 512
+        dummy_mask = np.zeros((h, w), dtype=np.uint16)
+        self.frame_by_frame_widget.initialize(dummy_mask)
+        self.stacked_widget.setCurrentIndex(1)
 
     def on_back_to_tracking(self):
         """Handle back to tracking navigation"""

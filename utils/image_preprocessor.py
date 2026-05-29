@@ -209,6 +209,21 @@ class ImagePreprocessor:
         )
         return processed_paths
 
+    def _resize_masks(
+        self, masks: np.ndarray, width: int, height: int
+    ) -> np.ndarray:
+        """Resize label masks with nearest-neighbor interpolation."""
+        if masks.shape[0] == height and masks.shape[1] == width:
+            return masks
+
+        work_dtype = np.uint16 if np.max(masks) > 255 else np.uint8
+        scaled_masks = cv2.resize(
+            masks.astype(work_dtype),
+            (width, height),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        return scaled_masks.astype(masks.dtype)
+
     def scale_masks_to_original(
         self, masks: np.ndarray, original_path: str
     ) -> np.ndarray:
@@ -229,21 +244,43 @@ class ImagePreprocessor:
         if scale_factor == 1.0:
             return masks
 
-        # Load original image to get dimensions
         original_image = cv2.imread(original_path)
         if original_image is None:
             return masks
 
         original_height, original_width = original_image.shape[:2]
+        return self._resize_masks(masks, original_width, original_height)
 
-        # Resize masks using nearest neighbor to preserve mask values
-        scaled_masks = cv2.resize(
-            masks.astype(np.uint8),
-            (original_width, original_height),
-            interpolation=cv2.INTER_NEAREST,
-        )
+    def scale_masks_to_processed(
+        self, masks: np.ndarray, original_path: str
+    ) -> np.ndarray:
+        """
+        Scale masks from original image dimensions to processed resolution.
 
-        return scaled_masks.astype(masks.dtype)
+        Args:
+            masks: Masks at original resolution
+            original_path: Path to original image
+
+        Returns:
+            Masks scaled to processed resolution
+        """
+        if original_path not in self.scale_factors:
+            return masks
+
+        scale_factor = self.scale_factors[original_path]
+        if scale_factor == 1.0:
+            return masks
+
+        processed_path = self.original_to_processed_paths.get(original_path)
+        if processed_path is None:
+            return masks
+
+        processed_image = cv2.imread(processed_path)
+        if processed_image is None:
+            return masks
+
+        processed_height, processed_width = processed_image.shape[:2]
+        return self._resize_masks(masks, processed_width, processed_height)
 
     def get_scale_factor(self, image_path: str = None) -> float:
         """Get scale factor for a given image path or the common scale factor"""

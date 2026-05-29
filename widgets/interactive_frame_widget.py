@@ -1,9 +1,9 @@
 from enum import Enum
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QLabel
 
 
@@ -24,7 +24,9 @@ class InteractiveFrameWidget(QLabel):
     box_drawn = pyqtSignal(tuple)  # (x1, y1, x2, y2)
     mask_clicked = pyqtSignal(tuple)  # (x, y) for mask removal
     cell_id_edit_requested = pyqtSignal(tuple, int)  # (x, y), current_cell_id
+    cell_picked = pyqtSignal(int)  # cell_id at click (view mode)
     mouse_hover = pyqtSignal(tuple)  # (x, y) for live preview
+    view_changed = pyqtSignal(float, float, float)  # zoom, pan_x, pan_y
 
     def __init__(self):
         super().__init__()
@@ -48,6 +50,10 @@ class InteractiveFrameWidget(QLabel):
         self.zoom_factor = 1.0
         self.panning = False
         self.last_pan_point = None
+        self._suppress_view_signal = False
+        self._click_pending = False
+        self._press_widget_pos: Optional[Tuple[int, int]] = None
+        self._drag_pan_threshold = 4
 
         # Box drawing
         self.drawing_box = False
@@ -59,6 +65,9 @@ class InteractiveFrameWidget(QLabel):
 
         # Cell ID overlay toggle
         self.show_cell_ids = True
+        self.cell_id_scale = 1.0
+        self.highlight_cell_id: Optional[int] = None
+        self.solo_cell_id: Optional[int] = None
 
     def set_annotation_mode(self, mode: AnnotationMode):
         """Set the annotation mode"""
@@ -83,6 +92,19 @@ class InteractiveFrameWidget(QLabel):
     def set_show_cell_ids(self, show: bool):
         """Toggle cell ID overlay visibility"""
         self.show_cell_ids = show
+        self.update()
+
+    def set_cell_id_scale(self, scale: float):
+        """Scale factor for ID label size (1.0 = default)."""
+        self.cell_id_scale = max(0.5, min(2.5, scale))
+        self.update()
+
+    def set_highlight_cell_id(self, cell_id: Optional[int]) -> None:
+        self.highlight_cell_id = cell_id
+        self.update_display()
+
+    def set_solo_cell_id(self, cell_id: Optional[int]) -> None:
+        self.solo_cell_id = cell_id
         self.update_display()
 
     def set_image(self, image: np.ndarray):
@@ -127,80 +149,103 @@ class InteractiveFrameWidget(QLabel):
     def set_zoom_factor(self, zoom: float):
         """Set the zoom factor"""
         self.zoom_factor = max(0.1, min(10.0, zoom))  # Limit zoom range
-        self.update_display()
+        self._update_view_transform()
+        self._emit_view_changed()
 
     def set_pan_offset(self, offset: tuple):
         """Set the pan offset"""
-        self.pan_offset = offset
-        self.update_display()
+        self.pan_offset = self._normalize_pan(offset)
+        self._update_view_transform()
+        self._emit_view_changed()
+
+    def apply_view_state(self, zoom: float, pan: tuple) -> None:
+        """Apply zoom/pan without emitting view_changed (for linked panes)."""
+        self._suppress_view_signal = True
+        self.zoom_factor = max(0.1, min(10.0, zoom))
+        self.pan_offset = self._normalize_pan(pan)
+        self._update_view_transform()
+        self._suppress_view_signal = False
+
+    @staticmethod
+    def _normalize_pan(pan: tuple) -> Tuple[int, int]:
+        return int(round(pan[0])), int(round(pan[1]))
+
+    def _emit_view_changed(self) -> None:
+        if not self._suppress_view_signal:
+            self.view_changed.emit(
+                self.zoom_factor,
+                float(self.pan_offset[0]),
+                float(self.pan_offset[1]),
+            )
 
     def reset_view(self):
         """Reset zoom and pan to default"""
         self.zoom_factor = 1.0
         self.pan_offset = (0, 0)
-        self.update_display()
+        self._update_view_transform()
+        self._emit_view_changed()
 
     def zoom_to_fit(self):
         """Reset zoom to fit the image in the widget"""
         self.zoom_factor = 1.0
         self.pan_offset = (0, 0)
-        self.update_display()
+        self._update_view_transform()
+        self._emit_view_changed()
 
     def update_display(self):
-        """Update the display with current image and overlays"""
+        """Rebuild overlay from image/masks and refresh view transform."""
+        if self.image is None:
+            return
+        self._rebuild_overlay_pixmap()
+        self._update_view_transform()
+
+    def _rebuild_overlay_pixmap(self) -> None:
+        """Expensive: composite image + masks into a cached pixmap."""
         if self.image is None:
             return
 
-        # Create display image
         display_image = self.image.copy()
 
-        # Overlay masks if available
         if self.masks is not None:
             display_image = self._overlay_masks(display_image, self.masks)
 
-        # Overlay preview mask if available and in click mode
         if (
             self.preview_mask is not None
             and self.annotation_mode == AnnotationMode.CLICK_ADD
         ):
             display_image = self._overlay_preview_mask(display_image, self.preview_mask)
 
-        # Convert to QPixmap and store for painting
         h, w = display_image.shape[:2]
         bytes_per_line = 3 * w
         q_image = QImage(
             display_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888
         )
-
-        # Store the original pixmap without scaling
         self.overlay_image = QPixmap.fromImage(q_image)
 
-        # Calculate transformation parameters but don't apply them to the pixmap
+    def _update_view_transform(self) -> None:
+        """Cheap: recompute scale/offset and repaint (pan/zoom/resize)."""
+        if self.image is None:
+            return
+
+        h, w = self.image.shape[:2]
         widget_size = self.size()
         available_width = max(widget_size.width() - 4, 1)
         available_height = max(widget_size.height() - 4, 1)
 
-        base_scale_x = available_width / w
-        base_scale_y = available_height / h
-        base_scale_factor = min(base_scale_x, base_scale_y)
-
-        # Apply zoom on top of base scale
+        base_scale_factor = min(available_width / w, available_height / h)
         self.scale_factor = base_scale_factor * self.zoom_factor
 
-        # Calculate the size of the scaled image
         scaled_width = int(w * self.scale_factor)
         scaled_height = int(h * self.scale_factor)
 
-        # Calculate offset with pan
         base_offset_x = (widget_size.width() - scaled_width) // 2
         base_offset_y = (widget_size.height() - scaled_height) // 2
 
         self.image_offset = (
-            base_offset_x + self.pan_offset[0],
-            base_offset_y + self.pan_offset[1],
+            int(base_offset_x + self.pan_offset[0]),
+            int(base_offset_y + self.pan_offset[1]),
         )
 
-        # Clear the pixmap and trigger a repaint
         self.setPixmap(QPixmap())
         self.update()
 
@@ -224,84 +269,87 @@ class InteractiveFrameWidget(QLabel):
 
         for obj_id in range(1, num_objects + 1):
             mask = masks == obj_id
-            if np.any(mask):
-                color = np.array(colors[obj_id - 1], dtype=np.uint8)
-                # Use the configurable transparency
-                alpha = self.mask_transparency
-                overlay[mask] = ((1 - alpha) * overlay[mask] + alpha * color).astype(
-                    np.uint8
-                )
+            if not np.any(mask):
+                continue
 
-        # Only add cell ID text if enabled
-        if self.show_cell_ids:
-            overlay = self._add_cell_id_text(overlay, masks, colors)
+            if self.solo_cell_id is not None and obj_id != self.solo_cell_id:
+                continue
+
+            color = np.array(colors[obj_id - 1], dtype=np.uint8)
+            alpha = self.mask_transparency
+            if self.highlight_cell_id is not None and obj_id == self.highlight_cell_id:
+                alpha = min(1.0, alpha + 0.35)
+
+            overlay[mask] = ((1 - alpha) * overlay[mask] + alpha * color).astype(
+                np.uint8
+            )
 
         return overlay
 
-    def _add_cell_id_text(
-        self, overlay: np.ndarray, masks: np.ndarray, colors: List[Tuple[int, int, int]]
-    ) -> np.ndarray:
-        """Add cell ID text to the overlay"""
-        import cv2
+    def _cell_id_font(self) -> QFont:
+        """Font for labels — scales uniformly with label size and zoom."""
+        # Height in image pixels at 100% label size; multiplied by scale_factor for screen.
+        image_px = 14.0 * self.cell_id_scale
+        screen_px = max(8, int(round(image_px * self.scale_factor)))
+        font = QFont()
+        font.setPixelSize(screen_px)
+        font.setBold(True)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        return font
 
-        num_objects = int(np.max(masks))
+    def _paint_cell_ids(self, painter: QPainter) -> None:
+        """Draw cell ID labels in screen space (consistent typeface at all sizes)."""
+        if not self.show_cell_ids or self.masks is None or self.image is None:
+            return
+
+        num_objects = int(np.max(self.masks))
+        if num_objects <= 0:
+            return
+
+        painter.setFont(self._cell_id_font())
+        metrics = painter.fontMetrics()
+        outline = QColor(0, 0, 0, 230)
+        fill = QColor(255, 255, 255)
 
         for obj_id in range(1, num_objects + 1):
-            mask = masks == obj_id
-            if np.any(mask):
-                # Find centroid of the mask
-                y_coords, x_coords = np.where(mask)
-                if len(y_coords) > 0:
-                    center_y = int(np.mean(y_coords))
-                    center_x = int(np.mean(x_coords))
+            if self.solo_cell_id is not None and obj_id != self.solo_cell_id:
+                continue
 
-                    # Choose text color (white or black based on background)
-                    text_color = (255, 255, 255)  # White text
+            mask = self.masks == obj_id
+            if not np.any(mask):
+                continue
 
-                    # Add text
-                    cv2.putText(
-                        overlay,
-                        str(obj_id),
-                        (center_x - 10, center_y + 5),  # Slight offset for centering
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,  # Font scale
-                        text_color,
-                        2,  # Thickness
-                        cv2.LINE_AA,
-                    )
+            y_coords, x_coords = np.where(mask)
+            cx = int(round(float(np.mean(x_coords))))
+            cy = int(round(float(np.mean(y_coords))))
+            wx, wy = self._image_to_widget_coords(cx, cy)
 
-                    # Add black outline for better visibility
-                    cv2.putText(
-                        overlay,
-                        str(obj_id),
-                        (center_x - 10, center_y + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 0, 0),  # Black outline
-                        4,  # Thicker for outline
-                        cv2.LINE_AA,
-                    )
+            text = str(obj_id)
+            tw = metrics.horizontalAdvance(text)
+            x = int(wx - tw / 2)
+            y = int(wy + (metrics.ascent() - metrics.descent()) / 2)
 
-                    # Add white text on top
-                    cv2.putText(
-                        overlay,
-                        str(obj_id),
-                        (center_x - 10, center_y + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        text_color,
-                        2,
-                        cv2.LINE_AA,
-                    )
+            for ox, oy in (
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1),
+            ):
+                painter.setPen(outline)
+                painter.drawText(x + ox, y + oy, text)
 
-        return overlay
+            painter.setPen(fill)
+            painter.drawText(x, y, text)
 
     def resizeEvent(self, event):
         """Handle widget resize events by updating the display"""
         super().resizeEvent(event)
-        # Update display when widget is resized to rescale the image
         if self.image is not None:
-            self.update_display()
+            self._update_view_transform()
 
     def _generate_colors(self, num_colors: int) -> List[Tuple[int, int, int]]:
         """Generate distinct colors for masks"""
@@ -439,10 +487,15 @@ class InteractiveFrameWidget(QLabel):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
 
-        if self.annotation_mode == AnnotationMode.VIEW:
-            return
-
         image_coords = self._widget_to_image_coords(pos.x(), pos.y())
+
+        if (
+            self.annotation_mode == AnnotationMode.VIEW
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self._click_pending = True
+            self._press_widget_pos = (pos.x(), pos.y())
+            return
 
         if self.annotation_mode == AnnotationMode.CLICK_ADD:
             self.point_clicked.emit(image_coords)
@@ -471,41 +524,48 @@ class InteractiveFrameWidget(QLabel):
         # Store last mouse position for brush preview
         self._last_mouse_pos = pos
 
+        if (
+            self._click_pending
+            and self._press_widget_pos is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+            and self.annotation_mode == AnnotationMode.VIEW
+        ):
+            dx = pos.x() - self._press_widget_pos[0]
+            dy = pos.y() - self._press_widget_pos[1]
+            if (dx * dx + dy * dy) >= self._drag_pan_threshold**2:
+                self._click_pending = False
+                self.panning = True
+                self.last_pan_point = (pos.x(), pos.y())
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
         # Handle panning
         if self.panning and self.last_pan_point:
             dx = pos.x() - self.last_pan_point[0]
             dy = pos.y() - self.last_pan_point[1]
 
-            # Calculate new pan offset
             new_pan_x = self.pan_offset[0] + dx
             new_pan_y = self.pan_offset[1] + dy
 
-            # Add some reasonable limits to prevent panning too far
             if self.image is not None:
                 widget_size = self.size()
                 h, w = self.image.shape[:2]
-
-                # Calculate scaled image size
                 available_width = max(widget_size.width() - 4, 1)
                 available_height = max(widget_size.height() - 4, 1)
-                base_scale_x = available_width / w
-                base_scale_y = available_height / h
-                base_scale_factor = min(base_scale_x, base_scale_y)
+                base_scale_factor = min(
+                    available_width / w, available_height / h
+                )
                 total_scale = base_scale_factor * self.zoom_factor
-
                 scaled_width = w * total_scale
                 scaled_height = h * total_scale
-
-                # Limit panning to keep at least part of the image visible
                 max_pan_x = scaled_width * 0.8
                 max_pan_y = scaled_height * 0.8
-
                 new_pan_x = max(-max_pan_x, min(max_pan_x, new_pan_x))
                 new_pan_y = max(-max_pan_y, min(max_pan_y, new_pan_y))
 
-            self.pan_offset = (new_pan_x, new_pan_y)
+            self.pan_offset = self._normalize_pan((new_pan_x, new_pan_y))
             self.last_pan_point = (pos.x(), pos.y())
-            self.update_display()
+            self._update_view_transform()
+            self._emit_view_changed()
             return
 
         if self.annotation_mode == AnnotationMode.BOX_ADD and self.drawing_box:
@@ -518,11 +578,28 @@ class InteractiveFrameWidget(QLabel):
 
     def mouseReleaseEvent(self, event):
         """Handle mouse release events"""
+        if (
+            self._click_pending
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.annotation_mode == AnnotationMode.VIEW
+            and self.masks is not None
+        ):
+            pos = event.position().toPoint()
+            x, y = self._widget_to_image_coords(pos.x(), pos.y())
+            if 0 <= y < self.masks.shape[0] and 0 <= x < self.masks.shape[1]:
+                cell_id = int(self.masks[y, x])
+                if cell_id > 0:
+                    self.cell_picked.emit(cell_id)
+            self._click_pending = False
+            self._press_widget_pos = None
+            return
+
         # Handle pan release
         if self.panning:
             self.panning = False
             self.last_pan_point = None
-            # Reset cursor based on current mode
+            self._click_pending = False
+            self._press_widget_pos = None
             if self.annotation_mode == AnnotationMode.VIEW:
                 self.setCursor(Qt.CursorShape.ArrowCursor)
             else:
@@ -580,12 +657,15 @@ class InteractiveFrameWidget(QLabel):
                 pan_adjust_x = mouse_x - widget_coords_after[0]
                 pan_adjust_y = mouse_y - widget_coords_after[1]
 
-                self.pan_offset = (
-                    self.pan_offset[0] + pan_adjust_x,
-                    self.pan_offset[1] + pan_adjust_y,
+                self.pan_offset = self._normalize_pan(
+                    (
+                        self.pan_offset[0] + pan_adjust_x,
+                        self.pan_offset[1] + pan_adjust_y,
+                    )
                 )
 
-                self.update_display()
+                self._update_view_transform()
+                self._emit_view_changed()
 
             event.accept()
         else:
@@ -615,12 +695,14 @@ class InteractiveFrameWidget(QLabel):
             )
 
             painter.drawPixmap(
-                target_rect[0],
-                target_rect[1],
-                target_rect[2],
-                target_rect[3],
+                int(target_rect[0]),
+                int(target_rect[1]),
+                int(target_rect[2]),
+                int(target_rect[3]),
                 self.overlay_image,
             )
+
+            self._paint_cell_ids(painter)
 
         # Draw bounding box during box drawing
         if (
