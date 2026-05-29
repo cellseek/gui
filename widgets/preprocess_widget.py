@@ -94,6 +94,14 @@ class PreprocessWidget(QWidget):
         left_layout.addWidget(self.preview, stretch=1)
 
         transport = QHBoxLayout()
+        self.prev_frame_btn = QPushButton("◀ Prev frame")
+        self.prev_frame_btn.clicked.connect(lambda: self._step_preview_frame(-1))
+        transport.addWidget(self.prev_frame_btn)
+
+        self.next_frame_btn = QPushButton("Next frame ▶")
+        self.next_frame_btn.clicked.connect(lambda: self._step_preview_frame(1))
+        transport.addWidget(self.next_frame_btn)
+
         self.play_btn = QPushButton("▶ Play")
         self.play_btn.setFixedWidth(88)
         self.play_btn.clicked.connect(self._toggle_play)
@@ -350,13 +358,26 @@ class PreprocessWidget(QWidget):
         self.trim_label.setText(
             f"Trim: frames {start + 1}–{end + 1} ({used} of {self._source_count})"
         )
-        in_clip = start <= self._preview_frame <= end
-        mark = " · in trim" if in_clip else " · outside trim"
         self.frame_label.setText(
-            f"Frame {self._preview_frame + 1} / {self._source_count}{mark}"
+            f"Frame {self._preview_frame + 1} of trim "
+            f"({start + 1}–{end + 1}, {self._source_count} total)"
         )
+        self.prev_frame_btn.setEnabled(self._preview_frame > start)
+        self.next_frame_btn.setEnabled(self._preview_frame < end)
 
         self._update_crop_ui()
+
+    def _step_preview_frame(self, delta: int) -> None:
+        if self._storage is None or self._source_count <= 0:
+            return
+        start, end = self._clip_range()
+        self._stop_play()
+        new_frame = max(start, min(self._preview_frame + delta, end))
+        if new_frame == self._preview_frame:
+            return
+        self._preview_frame = new_frame
+        self.trim_timeline.set_current_frame(new_frame)
+        self._refresh_preview(fast=False)
 
     def _on_timeline_scrub(self, frame: int) -> None:
         if frame == self._preview_frame and not self._scrubbing:

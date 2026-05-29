@@ -1,8 +1,9 @@
 from enum import Enum
 from typing import List, Optional, Tuple
 
+import cv2
 import numpy as np
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QLabel
 
@@ -13,6 +14,7 @@ class AnnotationMode(Enum):
     VIEW = "view"
     CLICK_ADD = "click_add"
     BOX_ADD = "box_add"
+    PAINT_ADD = "paint_add"
     MASK_REMOVE = "mask_remove"
     EDIT_CELL_ID = "edit_cell_id"
 
@@ -22,6 +24,7 @@ class InteractiveFrameWidget(QLabel):
 
     point_clicked = pyqtSignal(tuple)  # (x, y)
     box_drawn = pyqtSignal(tuple)  # (x1, y1, x2, y2)
+    paint_mask_ready = pyqtSignal(object)  # bool ndarray (H, W)
     mask_clicked = pyqtSignal(tuple)  # (x, y) for mask removal
     cell_id_edit_requested = pyqtSignal(tuple, int)  # (x, y), current_cell_id
     cell_picked = pyqtSignal(int)  # cell_id at click (view mode)
@@ -60,6 +63,13 @@ class InteractiveFrameWidget(QLabel):
         self.box_start = None
         self.box_end = None
 
+        # Brush painting (SAM mask prompt)
+        self.brush_radius = 6
+        self.painting = False
+        self.paint_erase = False
+        self.paint_mask: Optional[np.ndarray] = None
+        self._last_paint_point: Optional[Tuple[int, int]] = None
+
         # Enable mouse tracking for hover events
         self.setMouseTracking(True)
 
@@ -72,22 +82,86 @@ class InteractiveFrameWidget(QLabel):
     def set_annotation_mode(self, mode: AnnotationMode):
         """Set the annotation mode"""
         self.annotation_mode = mode
+        self._reset_pointer_state()
 
         # Clear preview when not in click mode
         if mode != AnnotationMode.CLICK_ADD:
             self.preview_mask = None
-            self.update_display()
 
-        if mode == AnnotationMode.VIEW:
+        if mode != AnnotationMode.PAINT_ADD:
+            self._clear_paint_mask()
+
+        self._update_cursor_for_mode()
+        self.update_display()
+
+    def _update_cursor_for_mode(self) -> None:
+        if self.annotation_mode == AnnotationMode.VIEW:
             self.setCursor(Qt.CursorShape.ArrowCursor)
-        elif mode in [
-            AnnotationMode.CLICK_ADD,
-            AnnotationMode.MASK_REMOVE,
-            AnnotationMode.EDIT_CELL_ID,
-        ]:
+        else:
             self.setCursor(Qt.CursorShape.CrossCursor)
-        elif mode == AnnotationMode.BOX_ADD:
-            self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def _reset_pointer_state(self) -> None:
+        """Clear transient mouse state (avoids stuck pan/draw after SAM or dialogs)."""
+        self.panning = False
+        self.last_pan_point = None
+        self._click_pending = False
+        self._press_widget_pos = None
+        self.drawing_box = False
+        self.box_start = None
+        self.box_end = None
+        if self.painting:
+            self._clear_paint_mask()
+
+    def leaveEvent(self, event: QEvent) -> None:
+        self._reset_pointer_state()
+        self._update_cursor_for_mode()
+        super().leaveEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        self._reset_pointer_state()
+        self._update_cursor_for_mode()
+        super().focusOutEvent(event)
+
+    def set_brush_radius(self, radius: int) -> None:
+        self.brush_radius = max(2, min(32, int(radius)))
+
+    def _clear_paint_mask(self) -> None:
+        self.painting = False
+        self.paint_erase = False
+        self.paint_mask = None
+        self._last_paint_point = None
+
+    def _ensure_paint_buffer(self) -> None:
+        if self.image is None:
+            return
+        h, w = self.image.shape[:2]
+        if self.paint_mask is None or self.paint_mask.shape != (h, w):
+            self.paint_mask = np.zeros((h, w), dtype=np.uint8)
+
+    def _paint_stroke_point(self, x: int, y: int, erase: bool) -> None:
+        self._ensure_paint_buffer()
+        if self.paint_mask is None:
+            return
+        value = 0 if erase else 255
+        cv2.circle(
+            self.paint_mask, (x, y), self.brush_radius, int(value), thickness=-1
+        )
+
+    def _paint_stroke_line(
+        self, x0: int, y0: int, x1: int, y1: int, erase: bool
+    ) -> None:
+        self._ensure_paint_buffer()
+        if self.paint_mask is None:
+            return
+        value = 0 if erase else 255
+        thickness = max(2, self.brush_radius * 2)
+        cv2.line(
+            self.paint_mask,
+            (x0, y0),
+            (x1, y1),
+            int(value),
+            thickness=thickness,
+        )
 
     def set_show_cell_ids(self, show: bool):
         """Toggle cell ID overlay visibility"""
@@ -136,6 +210,7 @@ class InteractiveFrameWidget(QLabel):
         self.zoom_factor = 1.0
         self.panning = False
         self.last_pan_point = None
+        self._clear_paint_mask()
 
         # Clear display
         self.clear()
@@ -506,6 +581,21 @@ class InteractiveFrameWidget(QLabel):
                 self.box_start = image_coords
                 self.box_end = image_coords
 
+        elif self.annotation_mode == AnnotationMode.PAINT_ADD:
+            if event.button() in (
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.RightButton,
+            ):
+                erase = event.button() == Qt.MouseButton.RightButton
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    erase = not erase
+                self.painting = True
+                self.paint_erase = erase
+                x, y = image_coords
+                self._paint_stroke_point(x, y, erase)
+                self._last_paint_point = (x, y)
+                self.update()
+
         elif self.annotation_mode == AnnotationMode.MASK_REMOVE:
             self.mask_clicked.emit(image_coords)
 
@@ -538,8 +628,14 @@ class InteractiveFrameWidget(QLabel):
                 self.last_pan_point = (pos.x(), pos.y())
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
-        # Handle panning
-        if self.panning and self.last_pan_point:
+        # Handle panning (abort if button was released without a release event)
+        pan_buttons = (
+            Qt.MouseButton.LeftButton | Qt.MouseButton.MiddleButton
+        )
+        if self.panning and not (event.buttons() & pan_buttons):
+            self._reset_pointer_state()
+            self._update_cursor_for_mode()
+        elif self.panning and self.last_pan_point:
             dx = pos.x() - self.last_pan_point[0]
             dy = pos.y() - self.last_pan_point[1]
 
@@ -571,6 +667,26 @@ class InteractiveFrameWidget(QLabel):
         if self.annotation_mode == AnnotationMode.BOX_ADD and self.drawing_box:
             self.box_end = self._widget_to_image_coords(pos.x(), pos.y())
             self.update()  # Trigger repaint to show box
+        elif (
+            self.annotation_mode == AnnotationMode.PAINT_ADD
+            and self.painting
+            and event.buttons()
+            & (Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
+        ):
+            erase = self.paint_erase
+            x, y = self._widget_to_image_coords(pos.x(), pos.y())
+            if self._last_paint_point is not None:
+                self._paint_stroke_line(
+                    self._last_paint_point[0],
+                    self._last_paint_point[1],
+                    x,
+                    y,
+                    erase,
+                )
+            else:
+                self._paint_stroke_point(x, y, erase)
+            self._last_paint_point = (x, y)
+            self.update()
         elif self.annotation_mode == AnnotationMode.CLICK_ADD:
             # Emit hover signal for live preview
             image_coords = self._widget_to_image_coords(pos.x(), pos.y())
@@ -596,14 +712,8 @@ class InteractiveFrameWidget(QLabel):
 
         # Handle pan release
         if self.panning:
-            self.panning = False
-            self.last_pan_point = None
-            self._click_pending = False
-            self._press_widget_pos = None
-            if self.annotation_mode == AnnotationMode.VIEW:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
-            else:
-                self.setCursor(Qt.CursorShape.CrossCursor)
+            self._reset_pointer_state()
+            self._update_cursor_for_mode()
             return
 
         if self.annotation_mode == AnnotationMode.BOX_ADD and self.drawing_box:
@@ -618,58 +728,56 @@ class InteractiveFrameWidget(QLabel):
             self.box_end = None
             self.update()
 
+        if self.annotation_mode == AnnotationMode.PAINT_ADD and self.painting:
+            self.painting = False
+            self._last_paint_point = None
+            if self.paint_mask is not None and np.any(self.paint_mask):
+                painted = self.paint_mask > 0
+                self._clear_paint_mask()
+                self.update()
+                self.paint_mask_ready.emit(painted)
+            else:
+                self._clear_paint_mask()
+                self.update()
+            if self.annotation_mode == AnnotationMode.PAINT_ADD:
+                self.setCursor(Qt.CursorShape.CrossCursor)
+
     def wheelEvent(self, event):
-        """Handle mouse wheel events for zooming"""
-        # Only zoom if Ctrl is held or if we're in view mode
-        if (
-            event.modifiers() & Qt.KeyboardModifier.ControlModifier
-            or self.annotation_mode == AnnotationMode.VIEW
-        ):
-            # Get wheel delta
-            delta = event.angleDelta().y()
-
-            # Calculate zoom factor (positive delta = zoom in, negative = zoom out)
-            zoom_in = delta > 0
-            zoom_factor = 1.1 if zoom_in else 1.0 / 1.1
-
-            # Apply zoom
-            new_zoom = self.zoom_factor * zoom_factor
-            new_zoom = max(0.1, min(10.0, new_zoom))  # Limit zoom range
-
-            if new_zoom != self.zoom_factor and self.image is not None:
-                # Get mouse position
-                mouse_pos = event.position().toPoint()
-                mouse_x, mouse_y = mouse_pos.x(), mouse_pos.y()
-
-                # Calculate the image coordinates under the mouse before zoom
-                image_coords_before = self._widget_to_image_coords(mouse_x, mouse_y)
-
-                # Update zoom factor
-                old_zoom = self.zoom_factor
-                self.zoom_factor = new_zoom
-
-                # Calculate the widget coordinates where the same image point would be after zoom
-                widget_coords_after = self._image_to_widget_coords(
-                    image_coords_before[0], image_coords_before[1]
-                )
-
-                # Adjust pan offset to keep the image point under the mouse cursor
-                pan_adjust_x = mouse_x - widget_coords_after[0]
-                pan_adjust_y = mouse_y - widget_coords_after[1]
-
-                self.pan_offset = self._normalize_pan(
-                    (
-                        self.pan_offset[0] + pan_adjust_x,
-                        self.pan_offset[1] + pan_adjust_y,
-                    )
-                )
-
-                self._update_view_transform()
-                self._emit_view_changed()
-
-            event.accept()
-        else:
+        """Handle mouse wheel events for zooming (all annotation modes)."""
+        if self.image is None:
             super().wheelEvent(event)
+            return
+
+        delta = event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+
+        zoom_in = delta > 0
+        zoom_factor = 1.1 if zoom_in else 1.0 / 1.1
+        new_zoom = self.zoom_factor * zoom_factor
+        new_zoom = max(0.1, min(10.0, new_zoom))
+
+        if new_zoom != self.zoom_factor:
+            mouse_pos = event.position().toPoint()
+            mouse_x, mouse_y = mouse_pos.x(), mouse_pos.y()
+            image_coords_before = self._widget_to_image_coords(mouse_x, mouse_y)
+            self.zoom_factor = new_zoom
+            widget_coords_after = self._image_to_widget_coords(
+                image_coords_before[0], image_coords_before[1]
+            )
+            pan_adjust_x = mouse_x - widget_coords_after[0]
+            pan_adjust_y = mouse_y - widget_coords_after[1]
+            self.pan_offset = self._normalize_pan(
+                (
+                    self.pan_offset[0] + pan_adjust_x,
+                    self.pan_offset[1] + pan_adjust_y,
+                )
+            )
+            self._update_view_transform()
+            self._emit_view_changed()
+
+        event.accept()
 
     def paintEvent(self, event):
         """Custom paint event to draw image with transformations and overlays"""
@@ -718,3 +826,30 @@ class InteractiveFrameWidget(QLabel):
             x2, y2 = self._image_to_widget_coords(self.box_end[0], self.box_end[1])
 
             painter.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+
+        self._paint_brush_overlay(painter)
+
+    def _paint_brush_overlay(self, painter: QPainter) -> None:
+        if (
+            self.paint_mask is None
+            or not np.any(self.paint_mask)
+            or self.image is None
+        ):
+            return
+
+        h, w = self.image.shape[:2]
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        rgba[self.paint_mask > 0] = (50, 220, 100, 140)
+
+        q_image = QImage(
+            np.ascontiguousarray(rgba).data, w, h, 4 * w, QImage.Format.Format_RGBA8888
+        ).copy()
+        scaled_width = int(w * self.scale_factor)
+        scaled_height = int(h * self.scale_factor)
+        target = QRect(
+            int(self.image_offset[0]),
+            int(self.image_offset[1]),
+            scaled_width,
+            scaled_height,
+        )
+        painter.drawImage(target, q_image)

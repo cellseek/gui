@@ -8,7 +8,7 @@ from typing import List, Optional
 import cv2
 from natsort import natsorted
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QCheckBox, QFileDialog, QMessageBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
 from services.storage_service import DEFAULT_VIDEO_FRAME_INTERVAL
 from utils.media_formats import VIDEO_EXTENSIONS, media_files_dialog_filter
@@ -22,7 +22,6 @@ class MediaImportWidget(QWidget):
     frames_ready = pyqtSignal(list)
     video_ready = pyqtSignal(str, int, int)  # path, frame_interval, logical_frame_count
     status_update = pyqtSignal(str)
-    auto_segment_toggled = pyqtSignal(bool)
 
     def __init__(self):
         super().__init__()
@@ -33,11 +32,6 @@ class MediaImportWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 32, 32, 32)
         layout.setSpacing(8)
-
-        self.auto_segment_checkbox = QCheckBox("Auto-segment first frame with CellSAM")
-        self.auto_segment_checkbox.setChecked(True)
-        self.auto_segment_checkbox.toggled.connect(self.auto_segment_toggled.emit)
-        layout.addWidget(self.auto_segment_checkbox)
 
         self.drop_zone = DropZoneWidget()
         self.drop_zone.files_dropped.connect(self.handle_dropped_files)
@@ -144,9 +138,6 @@ class MediaImportWidget(QWidget):
             sorted_paths = natsorted(valid_paths)
             self.frames_ready.emit(sorted_paths)
             self.status_update.emit(f"Loaded {len(sorted_paths)} images")
-
-    def is_auto_segment_enabled(self) -> bool:
-        return self.auto_segment_checkbox.isChecked()
 
     def reset_state(self):
         self.status_update.emit("Ready - Import video or images to begin")

@@ -2,7 +2,7 @@
 Frame-by-frame segmentation and tracking widget
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -27,8 +27,9 @@ from PyQt6.QtWidgets import (
 
 from services.annotation_service import AnnotationService
 from services.cell_track_service import CellTrackService
-from services.cutie_service import CutieService
+from services.tracking_service import TrackingService
 from services.mask_history_service import MaskHistoryService, MaskSnapshot
+from utils.mask_utils import align_mask_to_image
 from services.sam_service import SamService
 from services.storage_service import StorageService
 from widgets.cell_sidebar_widget import CellSidebarWidget
@@ -50,12 +51,13 @@ class FrameByFrameWidget(QWidget):
         self.storage_service = StorageService()
         self.annotation_service = AnnotationService(self)
         self.sam_service = SamService(self)
-        self.cutie_service = CutieService()
+        self.tracking_service = TrackingService()
         self.cell_track_service = CellTrackService()
         self._mask_history = MaskHistoryService()
 
         # Track pending async operations
-        self._pending_frame_index = None
+        self._pending_frame_index: Optional[int] = None
+        self._pending_tracking_mode: Optional[Literal["relink", "advance"]] = None
         self._selected_cell_id: Optional[int] = None
         self._syncing_view = False
         self.frames_splitter: Optional[QSplitter] = None
@@ -172,6 +174,15 @@ class FrameByFrameWidget(QWidget):
         self.redo_button.setEnabled(False)
         nav_layout.addWidget(self.redo_button)
 
+        self.relink_button = QPushButton("Relink")
+        self.relink_button.setToolTip(
+            "Re-assign cell IDs on this frame to match the previous frame "
+            "(keeps your current mask shapes)"
+        )
+        self.relink_button.clicked.connect(self.on_relink)
+        self.relink_button.setEnabled(False)
+        nav_layout.addWidget(self.relink_button)
+
         nav_layout.addSpacing(20)
 
         # Export button
@@ -264,6 +275,34 @@ class FrameByFrameWidget(QWidget):
         )
         self.mode_group.addButton(self.box_radio)
         tools_layout.addWidget(self.box_radio)
+
+        self.paint_radio = QRadioButton("Paint Add (6)")
+        self.paint_radio.setToolTip(
+            "Paint over a cell, release to segment with SAM. "
+            "Right-click or Shift = erase stroke."
+        )
+        self.paint_radio.toggled.connect(
+            lambda: self.annotation_service.set_annotation_mode(
+                self.curr_image_label, AnnotationMode.PAINT_ADD
+            )
+        )
+        self.mode_group.addButton(self.paint_radio)
+        tools_layout.addWidget(self.paint_radio)
+
+        brush_label = QLabel("Brush:")
+        tools_layout.addWidget(brush_label)
+
+        self.brush_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brush_slider.setRange(2, 32)
+        self.brush_slider.setValue(6)
+        self.brush_slider.setFixedWidth(80)
+        self.brush_slider.setToolTip("Brush size in pixels")
+        self.brush_slider.valueChanged.connect(self.on_brush_size_changed)
+        tools_layout.addWidget(self.brush_slider)
+
+        self.brush_value_label = QLabel("6")
+        self.brush_value_label.setFixedWidth(24)
+        tools_layout.addWidget(self.brush_value_label)
 
         self.remove_radio = QRadioButton("Remove (4)")
         self.remove_radio.toggled.connect(
@@ -372,6 +411,7 @@ class FrameByFrameWidget(QWidget):
         self.curr_image_label = InteractiveFrameWidget()
         self.curr_image_label.point_clicked.connect(self.sam_service.on_point_clicked)
         self.curr_image_label.box_drawn.connect(self.sam_service.on_box_drawn)
+        self.curr_image_label.paint_mask_ready.connect(self.sam_service.on_paint_mask)
         self.curr_image_label.mask_clicked.connect(
             self.annotation_service.on_mask_clicked
         )
@@ -423,10 +463,9 @@ class FrameByFrameWidget(QWidget):
 
     def setup_async_connections(self):
         """Setup connections for async operations"""
-        # Connect CUTIE async signals
-        self.cutie_service.tracking_complete.connect(self._on_tracking_complete)
-        self.cutie_service.tracking_error.connect(self._on_tracking_error)
-        self.cutie_service.status_update.connect(self.status_update.emit)
+        self.tracking_service.tracking_complete.connect(self._on_tracking_complete)
+        self.tracking_service.tracking_error.connect(self._on_tracking_error)
+        self.tracking_service.status_update.connect(self.status_update.emit)
 
     # ------------------------------------------------------------------------ #
     # ------------------------------- Callbacks ------------------------------ #
@@ -450,6 +489,10 @@ class FrameByFrameWidget(QWidget):
         scale = value / 100.0
         self.curr_image_label.set_cell_id_scale(scale)
         self.prev_image_label.set_cell_id_scale(scale)
+
+    def on_brush_size_changed(self, value: int) -> None:
+        self.brush_value_label.setText(str(value))
+        self.curr_image_label.set_brush_radius(value)
 
     def on_cell_picked_on_canvas(self, cell_id: int):
         self._selected_cell_id = cell_id
@@ -545,7 +588,6 @@ class FrameByFrameWidget(QWidget):
         self.storage_service.clear_all_masks()
         self.storage_service.invalidate_frame_cache()
         self.storage_service.set_current_frame_index(0)
-        self.cutie_service.reset_tracker()
         self._selected_cell_id = None
         self._pending_frame_index = None
         self.curr_image_label.clear_all_state()
@@ -556,8 +598,6 @@ class FrameByFrameWidget(QWidget):
         """Clear all data and reset widget state"""
         self._mask_history.clear()
         self.storage_service.clear_all_data()
-
-        self.cutie_service.reset_tracker()
 
         self.curr_image_label.clear_all_state()
         self.prev_image_label.clear_all_state()
@@ -576,8 +616,15 @@ class FrameByFrameWidget(QWidget):
     def initialize(self, first_frame_mask: np.ndarray):
         """Apply first-frame masks; media must already be opened in storage."""
         self._mask_history.clear()
-        self.storage_service.set_mask_for_frame(0, first_frame_mask.astype(np.uint16))
-        self.cutie_service.reset_tracker()
+        frame = self.storage_service.get_frame(0)
+        if frame is not None:
+            h, w = frame.shape[:2]
+            first_frame_mask = align_mask_to_image(
+                first_frame_mask.astype(np.uint16), h, w
+            )
+        else:
+            first_frame_mask = first_frame_mask.astype(np.uint16)
+        self.storage_service.set_mask_for_frame(0, first_frame_mask)
         self.storage_service.set_current_frame_index(0)
         self.update_display()
         self.refresh_cell_inspector()
@@ -597,12 +644,12 @@ class FrameByFrameWidget(QWidget):
         self.frame_info_label.setText(f"Frame {current_index + 1} / {total_frames}")
 
         # Update navigation buttons
-        cutie_running = self.is_cutie_running()
+        tracking = self.is_tracking_running()
         self.prev_button.setEnabled(
-            self.storage_service.has_previous_frame() and not cutie_running
+            self.storage_service.has_previous_frame() and not tracking
         )
         self.next_button.setEnabled(
-            self.storage_service.has_next_frame() and not cutie_running
+            self.storage_service.has_next_frame() and not tracking
         )
 
         # Update export button - only show when at last frame
@@ -636,11 +683,31 @@ class FrameByFrameWidget(QWidget):
         self._apply_cell_highlighting()
         self._equalize_frame_panels()
         self._update_undo_redo_buttons()
+        self._update_relink_button()
+
+    def _update_relink_button(self) -> None:
+        if not hasattr(self, "relink_button"):
+            return
+        current_index = self.storage_service.get_current_frame_index()
+        prev_mask = (
+            self.storage_service.get_mask_for_frame(current_index - 1)
+            if current_index > 0
+            else None
+        )
+        curr_mask = self.storage_service.get_current_frame_masks()
+        can_relink = (
+            current_index > 0
+            and prev_mask is not None
+            and np.any(prev_mask)
+            and curr_mask is not None
+            and np.any(curr_mask)
+            and not self.is_tracking_running()
+        )
+        self.relink_button.setEnabled(can_relink)
 
     def previous_frame(self):
         """Go to previous frame"""
-        # Don't allow navigation when CUTIE is running
-        if self.is_cutie_running():
+        if self.is_tracking_running():
             return
 
         if self.storage_service.has_previous_frame():
@@ -649,65 +716,129 @@ class FrameByFrameWidget(QWidget):
             self.update_display()
 
     def next_frame(self):
-        """Go to next frame and run tracking if needed"""
-        # Don't allow navigation when CUTIE is running
-        if self.is_cutie_running():
+        """Go to next frame; auto-segment and link if that frame has no mask yet."""
+        if self.is_tracking_running():
             return
 
-        if self.storage_service.has_next_frame():
-            current_index = self.storage_service.get_current_frame_index()
-            next_index = current_index + 1
+        if not self.storage_service.has_next_frame():
+            return
 
-            # If this is a new frame that needs tracking, run CUTIE
-            if (
-                not self.storage_service.has_mask_for_frame(next_index)
-                and next_index > 0
-                and self.storage_service.has_mask_for_frame(current_index)
-            ):
-                # Store the target frame index for when tracking completes
-                self._pending_frame_index = next_index
+        current_index = self.storage_service.get_current_frame_index()
+        next_index = current_index + 1
 
-                # Get data for tracking
-                previous_image = self.storage_service.get_frame(current_index)
-                previous_mask = self.storage_service.get_mask_for_frame(current_index)
-                current_image = self.storage_service.get_frame(next_index)
+        if (
+            not self.storage_service.has_mask_for_frame(next_index)
+            and next_index > 0
+            and self.storage_service.has_mask_for_frame(current_index)
+        ):
+            previous_image = self.storage_service.get_frame(current_index)
+            previous_mask = self.storage_service.get_mask_for_frame(current_index)
+            current_image = self.storage_service.get_frame(next_index)
+            if previous_image is None or current_image is None:
+                return
 
-                self.cutie_service.track_async(
-                    previous_image,
-                    previous_mask,
-                    current_image,
-                    current_index,
-                    next_index,
-                )
-            else:
-                # Just move to next frame (already has mask or is first frame)
-                self.storage_service.set_current_frame_index(next_index)
-                self.update_display()
+            self._pending_frame_index = next_index
+            self._pending_tracking_mode = "advance"
+            self.tracking_service.track_async(
+                previous_image, previous_mask, current_image
+            )
+            return
+
+        self.storage_service.set_current_frame_index(next_index)
+        self.update_display()
+
+    def on_relink(self) -> None:
+        """Re-assign IDs on the current mask using the previous frame."""
+        if self.is_tracking_running():
+            return
+
+        current_index = self.storage_service.get_current_frame_index()
+        if current_index <= 0:
+            self.show_warning(
+                "Relink",
+                "The first frame has no previous frame to link from.",
+            )
+            return
+
+        prev_index = current_index - 1
+        previous_mask = self.storage_service.get_mask_for_frame(prev_index)
+        if previous_mask is None or not np.any(previous_mask):
+            self.show_warning(
+                "Relink",
+                "The previous frame has no masks to link from.",
+            )
+            return
+
+        current_mask = self.storage_service.get_mask_for_frame(current_index)
+        if current_mask is None or not np.any(current_mask):
+            self.show_warning(
+                "Relink",
+                "The current frame has no mask. Segment it first (e.g. SAM / Paint), "
+                "or use Next on an empty frame to auto-segment.",
+            )
+            return
+
+        previous_image = self.storage_service.get_frame(prev_index)
+        current_image = self.storage_service.get_frame(current_index)
+        if previous_image is None or current_image is None:
+            self.show_warning("Relink", "Failed to load frames for linking.")
+            return
+
+        self.begin_mask_edit()
+        self._pending_frame_index = current_index
+        self._pending_tracking_mode = "relink"
+        self.tracking_service.relink_async(
+            previous_image,
+            previous_mask,
+            current_image,
+            current_mask,
+        )
 
     def _on_tracking_complete(self, predicted_mask: np.ndarray):
-        """Handle successful tracking completion"""
-        if self._pending_frame_index is not None:
-            # Store the predicted mask and move to next frame
-            self.storage_service.set_mask_for_frame(
-                self._pending_frame_index, predicted_mask.astype(np.uint16)
-            )
-            self.storage_service.set_current_frame_index(self._pending_frame_index)
-            self.update_display()
-            self.status_update.emit(
-                f"Frame {self._pending_frame_index + 1} tracked successfully"
-            )
-            self._pending_frame_index = None
+        """Handle successful relink / tracking completion."""
+        if self._pending_frame_index is None:
+            return
+
+        frame_index = self._pending_frame_index
+        self.storage_service.set_mask_for_frame(
+            frame_index, predicted_mask.astype(np.uint16)
+        )
+
+        removed_count = 0
+        if frame_index < self.storage_service.get_frame_count() - 1:
+            removed_count = self.storage_service.remove_masks_after_frame(frame_index)
+
+        mode = self._pending_tracking_mode
+        if mode == "advance":
+            self.storage_service.set_current_frame_index(frame_index)
+
+        self.update_display()
+
+        if mode == "relink":
+            msg = f"Frame {frame_index + 1} relinked"
+            if removed_count > 0:
+                msg += f" (cleared {removed_count} later frame masks)"
+            self.status_update.emit(msg)
+        elif mode == "advance":
+            self.status_update.emit(f"Frame {frame_index + 1} segmented and linked")
+        else:
+            self.status_update.emit(f"Frame {frame_index + 1} updated")
+
+        self._pending_frame_index = None
+        self._pending_tracking_mode = None
 
     def _on_tracking_error(self, error_message: str):
         """Handle tracking error"""
-        if self._pending_frame_index is not None:
-            # Tracking failed, show error but still allow navigation
-            self.show_warning(
-                "Tracking Error", f"CUTIE tracking failed: {error_message}"
-            )
+        if self._pending_frame_index is None:
+            return
+
+        mode = self._pending_tracking_mode
+        self.show_warning("Linking Error", f"Linking failed: {error_message}")
+        if mode == "advance":
             self.storage_service.set_current_frame_index(self._pending_frame_index)
-            self.update_display()
-            self._pending_frame_index = None
+        self._pending_frame_index = None
+        self._pending_tracking_mode = None
+        self.update_display()
 
     def begin_mask_edit(self) -> None:
         """Snapshot masks from the current frame onward for undo."""
@@ -732,11 +863,10 @@ class FrameByFrameWidget(QWidget):
                 self.storage_service.remove_mask_for_frame(frame_index)
             else:
                 self.storage_service.set_mask_for_frame(frame_index, masks)
-        self.cutie_service.reset_tracker()
         self.update_display()
 
     def on_undo(self) -> None:
-        if self.is_cutie_running():
+        if self.is_tracking_running():
             return
         snapshot = self._mask_history.undo(self._capture_mask_snapshot_from_current)
         if snapshot is None:
@@ -746,7 +876,7 @@ class FrameByFrameWidget(QWidget):
         self._update_undo_redo_buttons()
 
     def on_redo(self) -> None:
-        if self.is_cutie_running():
+        if self.is_tracking_running():
             return
         snapshot = self._mask_history.redo(self._capture_mask_snapshot_from_current)
         if snapshot is None:
@@ -756,7 +886,7 @@ class FrameByFrameWidget(QWidget):
         self._update_undo_redo_buttons()
 
     def _update_undo_redo_buttons(self) -> None:
-        can_edit = not self.is_cutie_running()
+        can_edit = not self.is_tracking_running()
         self.undo_button.setEnabled(can_edit and self._mask_history.can_undo())
         self.redo_button.setEnabled(can_edit and self._mask_history.can_redo())
 
@@ -768,6 +898,8 @@ class FrameByFrameWidget(QWidget):
         elif self.click_radio.isChecked():
             self.box_radio.setChecked(True)
         elif self.box_radio.isChecked():
+            self.paint_radio.setChecked(True)
+        elif self.paint_radio.isChecked():
             self.remove_radio.setChecked(True)
         elif self.remove_radio.isChecked():
             self.edit_id_radio.setChecked(True)
@@ -785,7 +917,6 @@ class FrameByFrameWidget(QWidget):
     def set_mask_for_frame(self, frame_index: int, masks: np.ndarray) -> None:
         """Delegate for annotation service"""
         self.storage_service.set_mask_for_frame(frame_index, masks)
-        self.cutie_service.reset_tracker()
 
     def get_current_frame_index(self) -> int:
         """Delegate for annotation service"""
@@ -838,11 +969,8 @@ class FrameByFrameWidget(QWidget):
         """Delegate for SAM service"""
         QMessageBox.warning(self, title, message)
 
-    def is_cutie_running(self) -> bool:
-        """Check if CUTIE tracking is currently running"""
-        if self.cutie_service.cutie_worker is None:
-            return False
-        return self.cutie_service.cutie_worker.isRunning()
+    def is_tracking_running(self) -> bool:
+        return self.tracking_service.is_running()
 
     def is_at_last_frame(self) -> bool:
         """Check if we're currently at the last frame"""

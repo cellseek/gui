@@ -41,7 +41,6 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        # Setup services
         self.cellsam_service = CellSamService(self)
 
         # Setup UI
@@ -137,7 +136,6 @@ class MainWindow(QMainWindow):
         # Export widget connections
         self.export_widget.back_to_tracking.connect(self.on_back_to_tracking)
 
-        # CellSAM async connections
         self.cellsam_service.segmentation_complete.connect(self._on_cellsam_complete)
         self.cellsam_service.segmentation_error.connect(self._on_cellsam_error)
         self.cellsam_service.status_update.connect(self.on_status_update)
@@ -178,12 +176,6 @@ class MainWindow(QMainWindow):
         """Handle status updates"""
         self.status_label.setText(message)
 
-    def _set_segmentation_wait_cursor(self, waiting: bool) -> None:
-        if waiting:
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        else:
-            QApplication.restoreOverrideCursor()
-
     def on_frames_ready(self, frame_paths: List[str]):
         """Handle image sequence import (lazy per-frame loading)."""
         storage = self.frame_by_frame_widget.storage_service
@@ -217,60 +209,42 @@ class MainWindow(QMainWindow):
     def on_preprocess_confirmed(self, settings: PreprocessSettings) -> None:
         storage = self.frame_by_frame_widget.storage_service
         storage.set_preprocess_settings(settings)
-        self._begin_tracking_session(
-            auto_segment=self.media_import_widget.is_auto_segment_enabled()
-        )
+        self._begin_tracking_session()
 
-    def _begin_tracking_session(self, auto_segment: bool):
-        if auto_segment:
-            storage = self.frame_by_frame_widget.storage_service
-            first_frame = storage.get_frame(0)
-            if first_frame is None:
-                self.show_error("Import Error", "Failed to load first frame")
-                return
-
-            self.status_label.setText("Segmenting first frame...")
-            self._set_segmentation_wait_cursor(True)
-            self.cellsam_service.segment_first_frame_async(image_rgb=first_frame)
-        else:
-            self._initialize_without_segmentation()
-
-    def _initialize_without_segmentation(self):
-        """Initialize frame-by-frame widget without auto-segmentation"""
-        first_frame = self.frame_by_frame_widget.storage_service.get_frame(0)
+    def _begin_tracking_session(self) -> None:
+        """Open tracking and auto-segment frame 0 with CellSAM."""
+        storage = self.frame_by_frame_widget.storage_service
+        first_frame = storage.get_frame(0)
         if first_frame is None:
             self.show_error("Import Error", "Failed to load first frame")
             return
 
         h, w = first_frame.shape[:2]
-        empty_masks = np.zeros((h, w), dtype=np.uint16)
-        self.frame_by_frame_widget.initialize(empty_masks)
-        self.status_label.setText("Frames loaded without auto-segmentation")
+        self.frame_by_frame_widget.initialize(np.zeros((h, w), dtype=np.uint16))
         self.stacked_widget.setCurrentIndex(IDX_TRACKING)
 
-    def _on_cellsam_complete(self, first_frame_masks: np.ndarray):
-        """Handle successful CellSAM completion"""
-        self._set_segmentation_wait_cursor(False)
+        self.status_label.setText("Segmenting first frame with CellSAM...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.cellsam_service.segment_first_frame_async(image_rgb=first_frame)
+
+    def _on_cellsam_complete(self, first_frame_masks: np.ndarray) -> None:
+        QApplication.restoreOverrideCursor()
         self.frame_by_frame_widget.initialize(first_frame_masks)
-        self.status_label.setText("Frames loaded with CellSAM segmentation")
-        self.stacked_widget.setCurrentIndex(IDX_TRACKING)
+        self.status_label.setText(
+            "First frame segmented — refine with SAM / Paint, then press Next"
+        )
 
-    def _on_cellsam_error(self, error_message: str):
-        """Handle CellSAM error"""
-        self._set_segmentation_wait_cursor(False)
+    def _on_cellsam_error(self, error_message: str) -> None:
+        QApplication.restoreOverrideCursor()
         self.show_error(
             "CellSAM Error",
-            f"Failed to segment first frame: {error_message}. "
-            "You can manually annotate the first frame.",
+            f"Could not segment the first frame: {error_message}\n"
+            "You can annotate manually with SAM or Paint.",
         )
         first_frame = self.frame_by_frame_widget.storage_service.get_frame(0)
         if first_frame is not None:
             h, w = first_frame.shape[:2]
-        else:
-            h, w = 512, 512
-        dummy_mask = np.zeros((h, w), dtype=np.uint16)
-        self.frame_by_frame_widget.initialize(dummy_mask)
-        self.stacked_widget.setCurrentIndex(IDX_TRACKING)
+            self.frame_by_frame_widget.initialize(np.zeros((h, w), dtype=np.uint16))
 
     def on_back_to_tracking(self):
         """Handle back to tracking navigation"""

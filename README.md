@@ -1,6 +1,6 @@
 # CellSeek GUI - Frame-by-Frame Cell Tracking
 
-A modern PyQt6 interface for frame-by-frame cell segmentation and tracking using CellSAM, SAM, and CUTIE.
+A modern PyQt6 interface for frame-by-frame cell segmentation and tracking using CellSAM and SAM.
 
 ## Overview
 
@@ -26,7 +26,8 @@ python main.py
 - **Modern Dark Theme**: Professional, eye-friendly interface optimized for long work sessions
 - **Drag & Drop Import**: Support for video files and image sequences
 - **Frame-by-Frame Workflow**: Manual supervision at every step
-- **CellSAM Integration**: Automatic cell segmentation for initial frame
+- **CellSAM Integration**: Segmentation for the first frame and each tracked frame
+- **Trackastra linking**: ML-based cell identity assignment between frames
 - **SAM Manual Annotation**: Point/box-based editing and mask removal
 - **Real-time Feedback**: Immediate visual updates for all operations
 - **Keyboard Shortcuts**: Efficient navigation and tool switching
@@ -88,7 +89,6 @@ pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
 - Switch to the Segmentation tab
 - Select the first frame for analysis
 - Adjust CellSAM parameters:
-  - Model type (vit_h, vit_l, vit_b)
   - Flow threshold
   - Cellprob threshold
   - Cell diameter
@@ -103,11 +103,8 @@ pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
 
 ### 5. Cell Tracking
 
-- Move to the Tracking tab
-- Configure CUTIE parameters
-- Click "Start Tracking" to track cells across all frames
-- Monitor progress in real-time
-- View tracking results with overlay visualization
+- Press **Next** (or **D**) to advance; each new frame is segmented with CellSAM and linked to the previous frame with [Trackastra](https://github.com/weigertlab/trackastra)
+- Correct masks manually when needed; undo/redo (**Ctrl+Z** / **Ctrl+Y**) is available
 
 ### 6. Analysis
 
@@ -145,7 +142,7 @@ gui/
     ├── __init__.py
     ├── frame_manager.py     # Frame loading and display
     ├── segmentation_panel.py # CellSAM integration
-    ├── tracking_panel.py    # CUTIE integration
+    ├── frame_by_frame_widget.py  # Tracking workflow
     ├── analysis_panel.py    # Data analysis and plots
     └── export_panel.py      # Result export
 ```
@@ -158,12 +155,6 @@ gui/
 - **Flow Threshold**: Controls flow field sensitivity
 - **Cellprob Threshold**: Cell probability cutoff
 - **Cell Diameter**: Expected cell size in pixels
-
-### CUTIE Parameters
-
-- **Memory Bank Size**: Tracking memory capacity
-- **Update Frequency**: How often to update tracking
-- **Confidence Threshold**: Minimum tracking confidence
 
 ### Export Settings
 
@@ -233,7 +224,7 @@ For issues and questions:
 ### v1.0.0 (Initial Release)
 
 - Complete GUI framework
-- CellSAM and CUTIE integration
+- CellSAM segment-and-link tracking
 - Modern dark theme
 - Comprehensive export system
 - Real-time analysis and visualization

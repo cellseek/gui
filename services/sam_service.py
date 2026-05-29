@@ -7,6 +7,7 @@ from typing import Optional, Protocol, Tuple
 import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from utils.sam_mask import normalize_sam_binary_mask
 from workers.sam_worker import SamWorker
 
 
@@ -72,7 +73,11 @@ class SamService(QObject):
         self.status_update.emit(message)
 
         # If image was just loaded and we have a pending prediction, execute it
-        if message == "Image loaded in SAM" and self._pending_prediction is not None:
+        if message == "Image loaded in SAM":
+            self._loaded_frame_index = self.delegate.get_current_frame_index()
+            if self._pending_prediction is None:
+                return
+
             prediction_type, prediction_data = self._pending_prediction
             self._pending_prediction = None
 
@@ -89,10 +94,11 @@ class SamService(QObject):
                 elif prediction_type == "box":
                     self.sam_worker.predict_box_async(prediction_data)
                     self.status_update.emit(f"Running SAM on box {prediction_data}...")
+                elif prediction_type == "paint":
+                    self.sam_worker.predict_paint_mask_async(prediction_data)
+                    self.status_update.emit("Running SAM on painted region...")
             except Exception as e:
                 print(f"Error executing pending prediction: {e}")  # Debug logging
-                self.sam_error.emit(f"SAM prediction failed: {str(e)}")
-            except Exception as e:
                 self.sam_error.emit(f"SAM prediction failed: {str(e)}")
 
     def _ensure_frame_loaded(self, for_prediction: bool = False) -> bool:
@@ -207,26 +213,68 @@ class SamService(QObject):
                 self._pending_prediction = None
                 self.delegate.show_warning("SAM Error", "Failed to load current frame")
 
+    def on_paint_mask(self, paint_mask: np.ndarray) -> None:
+        """Handle brush-painted region for SAM segmentation."""
+        if self.delegate.get_frame_count() == 0:
+            return
+
+        if not np.any(paint_mask):
+            return
+
+        if self.sam_worker is None:
+            self.delegate.show_warning("SAM Error", "SAM worker not initialized")
+            return
+
+        if self.sam_worker.isRunning():
+            return
+
+        current_frame_index = self.delegate.get_current_frame_index()
+
+        if self._loaded_frame_index == current_frame_index:
+            try:
+                self.sam_worker.predict_paint_mask_async(paint_mask)
+                self.status_update.emit("Running SAM on painted region...")
+            except Exception as e:
+                self.sam_error.emit(f"SAM paint prediction failed: {str(e)}")
+        else:
+            self._pending_prediction = ("paint", paint_mask)
+            if self._ensure_frame_loaded(for_prediction=True):
+                self.status_update.emit("Loading image for SAM...")
+            else:
+                self._pending_prediction = None
+                self.delegate.show_warning("SAM Error", "Failed to load current frame")
+
     def _on_sam_complete(self, mask: np.ndarray, score: float) -> None:
         """Handle SAM completion"""
+        current_frame = self.delegate.get_current_frame()
+        if current_frame is None:
+            return
+
+        h, w = current_frame.shape[:2]
+        try:
+            region = normalize_sam_binary_mask(mask, h, w)
+        except ValueError as e:
+            self._on_sam_error(str(e))
+            return
+
+        if not np.any(region):
+            self.delegate.show_warning(
+                "SAM",
+                "No cell region detected. Try a larger brush stroke or box.",
+            )
+            return
+
         self.delegate.begin_mask_edit()
-        # Mark frame as loaded if it wasn't already
-        if self._loaded_frame_index != self.delegate.get_current_frame_index():
-            self._loaded_frame_index = self.delegate.get_current_frame_index()
+        self._loaded_frame_index = self.delegate.get_current_frame_index()
 
-        # Add mask to current frame
         current_masks = self.delegate.get_current_frame_masks()
-        if current_masks is None:
-            # Create new mask array
-            current_frame = self.delegate.get_current_frame()
-            h, w = current_frame.shape[:2]
+        if current_masks is None or current_masks.shape != (h, w):
             current_masks = np.zeros((h, w), dtype=np.uint16)
+        else:
+            current_masks = current_masks.copy()
 
-        # Find next available mask ID
-        next_id = np.max(current_masks) + 1
-
-        # Add new mask
-        current_masks[mask > 0] = next_id
+        next_id = int(current_masks.max(initial=0)) + 1
+        current_masks[region] = np.uint16(next_id)
         current_index = self.delegate.get_current_frame_index()
         self.delegate.set_mask_for_frame(current_index, current_masks)
         self.delegate.update_current_display_masks(current_masks)

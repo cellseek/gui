@@ -10,4 +10,4 @@ segment-anything
 natsort
 
 git+https://github.com/cellseek/cellsam
-git+https://github.com/cellseek/cutie
+trackastra

@@ -30,8 +30,7 @@ def check_and_download_weights():
     # Define required weight files and their download URLs
     weight_files = {
         "cpsam": "https://huggingface.co/LogicNg/cellseek/resolve/main/cpsam",
-        "cutie-base-mega.pth": "https://huggingface.co/LogicNg/cellseek/resolve/main/cutie-base-mega.pth",
-        "sam_vit_h_4b8939.pth": "https://huggingface.co/LogicNg/cellseek/resolve/main/sam_vit_h_4b8939.pth",
+        "sam_vit_b_01ec64.pth": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
     }
 
     missing_files = []

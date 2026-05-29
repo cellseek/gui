@@ -102,7 +102,9 @@ class CellTrackService:
         frame_indices: List[int] = []
         centroids: List[Tuple[float, float]] = []
 
-        for frame_idx in range(min(current_frame, frame_count - 1) + 1):
+        # Scan all frames so First/Last frame jumps use the full track, not only
+        # frames up to the current index.
+        for frame_idx in range(frame_count):
             mask = get_mask_for_frame(frame_idx)
             if mask is None or mask.size == 0 or cell_id not in mask:
                 continue
@@ -116,6 +118,9 @@ class CellTrackService:
             return None
 
         present_current = current_frame in frame_indices
+        centroids_up_to_current: List[Tuple[float, float]] = [
+            c for fi, c in zip(frame_indices, centroids) if fi <= current_frame
+        ]
         current_mask = get_mask_for_frame(current_frame)
 
         x_px = y_px = None
@@ -141,20 +146,21 @@ class CellTrackService:
         total_path_px = 0.0
         average_speed_px_per_frame = None
 
-        if len(centroids) >= 2:
-            start_x, start_y = centroids[0]
-            end_x, end_y = centroids[-1]
+        if len(centroids_up_to_current) >= 2:
+            start_x, start_y = centroids_up_to_current[0]
+            end_x, end_y = centroids_up_to_current[-1]
             displacement_px = math.hypot(end_x - start_x, end_y - start_y)
 
-            prev_x, prev_y = centroids[-2]
+            prev_x, prev_y = centroids_up_to_current[-2]
             step_displacement_px = math.hypot(end_x - prev_x, end_y - prev_y)
 
-            for i in range(1, len(centroids)):
-                dx = centroids[i][0] - centroids[i - 1][0]
-                dy = centroids[i][1] - centroids[i - 1][1]
+            for i in range(1, len(centroids_up_to_current)):
+                dx = centroids_up_to_current[i][0] - centroids_up_to_current[i - 1][0]
+                dy = centroids_up_to_current[i][1] - centroids_up_to_current[i - 1][1]
                 total_path_px += math.hypot(dx, dy)
 
-            frame_span = frame_indices[-1] - frame_indices[0]
+            indices_up_to_current = [fi for fi in frame_indices if fi <= current_frame]
+            frame_span = indices_up_to_current[-1] - indices_up_to_current[0]
             if frame_span > 0:
                 average_speed_px_per_frame = total_path_px / frame_span
 

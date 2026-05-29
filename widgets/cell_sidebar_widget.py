@@ -130,6 +130,8 @@ class CellSidebarWidget(QWidget):
             f"font-weight: bold; font-size: 13px; color: rgb({r},{g},{b});"
         )
         self._set_actions_enabled(True)
+        self.jump_first_btn.setEnabled(detail.first_frame != detail.current_frame)
+        self.jump_last_btn.setEnabled(detail.last_frame != detail.current_frame)
         self.detail_label.setText(self._format_detail(detail))
 
     def _format_detail(self, d: CellDetail) -> str:
