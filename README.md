@@ -1,6 +1,6 @@
 # CellSeek GUI - Frame-by-Frame Cell Tracking
 
-A modern PyQt6 interface for frame-by-frame cell segmentation and tracking using CellSAM and SAM.
+A modern PyQt6 interface for frame-by-frame cell segmentation and tracking using [Cellpose-SAM](https://github.com/MouseLand/cellpose) and SAM.
 
 ## Overview
 
@@ -11,7 +11,7 @@ This GUI implements a frame-by-frame workflow where users are involved in every 
 ### Prerequisites
 
 ```bash
-pip install PyQt6 opencv-python numpy torch torchvision natsort psutil
+pip install -r requirements.txt
 ```
 
 ### Running the Application
@@ -26,7 +26,7 @@ python main.py
 - **Modern Dark Theme**: Professional, eye-friendly interface optimized for long work sessions
 - **Drag & Drop Import**: Support for video files and image sequences
 - **Frame-by-Frame Workflow**: Manual supervision at every step
-- **CellSAM Integration**: Segmentation for the first frame and each tracked frame
+- **Cellpose-SAM**: Automatic segmentation for the first frame and each tracked frame
 - **Trackastra linking**: ML-based cell identity assignment between frames
 - **SAM Manual Annotation**: Point/box-based editing and mask removal
 - **Real-time Feedback**: Immediate visual updates for all operations
@@ -88,11 +88,7 @@ pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
 
 - Switch to the Segmentation tab
 - Select the first frame for analysis
-- Adjust CellSAM parameters:
-  - Flow threshold
-  - Cellprob threshold
-  - Cell diameter
-- Click "Run CellSAM" to perform automatic segmentation
+- First frame is segmented automatically with Cellpose-SAM when tracking starts
 - Masks will be overlaid on the image
 
 ### 4. Manual Annotation (Optional)
@@ -103,7 +99,7 @@ pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
 
 ### 5. Cell Tracking
 
-- Press **Next** (or **D**) to advance; each new frame is segmented with CellSAM and linked to the previous frame with [Trackastra](https://github.com/weigertlab/trackastra)
+- Press **Next** (or **D**) to advance; each new frame is segmented with Cellpose-SAM and linked to the previous frame with [Trackastra](https://github.com/weigertlab/trackastra)
 - Correct masks manually when needed; undo/redo (**Ctrl+Z** / **Ctrl+Y**) is available
 
 ### 6. Analysis
@@ -141,7 +137,7 @@ gui/
 └── widgets/
     ├── __init__.py
     ├── frame_manager.py     # Frame loading and display
-    ├── segmentation_panel.py # CellSAM integration
+    ├── cellsam_service.py      # Cellpose-SAM first-frame segmentation
     ├── frame_by_frame_widget.py  # Tracking workflow
     ├── analysis_panel.py    # Data analysis and plots
     └── export_panel.py      # Result export
@@ -149,12 +145,9 @@ gui/
 
 ## Configuration
 
-### CellSAM Parameters
+### Cellpose-SAM
 
-- **Model Type**: Choose model size vs. accuracy tradeoff
-- **Flow Threshold**: Controls flow field sensitivity
-- **Cellprob Threshold**: Cell probability cutoff
-- **Cell Diameter**: Expected cell size in pixels
+The `cpsam` model is loaded via the official [cellpose](https://github.com/MouseLand/cellpose) package. On first use it downloads to `~/.cellpose/models/` unless you place weights at `gui/weights/cpsam`.
 
 ### Export Settings
 
@@ -224,7 +217,7 @@ For issues and questions:
 ### v1.0.0 (Initial Release)
 
 - Complete GUI framework
-- CellSAM segment-and-link tracking
+- Cellpose-SAM segment-and-link tracking
 - Modern dark theme
 - Comprehensive export system
 - Real-time analysis and visualization

@@ -6,12 +6,17 @@ This script launches the new CellSeek frame-by-frame GUI application for cell se
 """
 
 import sys
+import warnings
+
+# urllib3/requests version mismatch noise from transitive deps (e.g. trackastra).
+warnings.filterwarnings("ignore", message=".*urllib3.*charset_normalizer.*")
+
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle
 
 from main_window import MainWindow
 
@@ -27,9 +32,8 @@ def check_and_download_weights():
     # Ensure weights directory exists
     weights_dir.mkdir(exist_ok=True)
 
-    # Define required weight files and their download URLs
+    # SAM ViT-B for interactive editing. Cellpose-SAM (cpsam) downloads on first segment.
     weight_files = {
-        "cpsam": "https://huggingface.co/LogicNg/cellseek/resolve/main/cpsam",
         "sam_vit_b_01ec64.pth": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
     }
 
@@ -82,6 +86,15 @@ def check_and_download_weights():
     return True
 
 
+class _NoFocusRectStyle(QProxyStyle):
+    """Hide the dotted focus rectangle Windows draws on clicked buttons."""
+
+    def drawPrimitive(self, element, option, painter, widget=None):
+        if element == QStyle.PrimitiveElement.PE_FrameFocusRect:
+            return
+        super().drawPrimitive(element, option, painter, widget)
+
+
 class CellSeekApp(QApplication):
     """Frame-by-frame application class for CellSeek GUI"""
 
@@ -100,8 +113,9 @@ class CellSeekApp(QApplication):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
-        # Apply dark theme
         self.setStyleSheet(self._get_dark_theme())
+        # Apply after stylesheet so the proxy wraps QStyleSheetStyle (drops dotted focus rect)
+        self.setStyle(_NoFocusRectStyle(self.style()))
 
         # Create main window
         self.main_window = MainWindow()
@@ -141,6 +155,10 @@ class CellSeekApp(QApplication):
         
         QPushButton:pressed {
             background-color: #005a9e;
+        }
+
+        QPushButton:focus {
+            background-color: #106ebe;
         }
         
         QPushButton:disabled {
@@ -267,6 +285,11 @@ class CellSeekApp(QApplication):
             border: 2px solid #0078d4;
             border-radius: 2px;
             background-color: #0078d4;
+        }
+
+        QRadioButton:focus,
+        QCheckBox:focus {
+            color: #ffffff;
         }
         """
 

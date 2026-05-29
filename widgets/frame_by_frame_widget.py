@@ -388,8 +388,8 @@ class FrameByFrameWidget(QWidget):
 
         self.frames_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        prev_panel = QWidget()
-        prev_layout = QVBoxLayout(prev_panel)
+        self.prev_frame_panel = QWidget()
+        prev_layout = QVBoxLayout(self.prev_frame_panel)
         prev_layout.setContentsMargins(0, 0, 0, 0)
         prev_layout.addWidget(QLabel("Previous Frame:"))
         self.prev_image_label = InteractiveFrameWidget()
@@ -400,7 +400,7 @@ class FrameByFrameWidget(QWidget):
         )
         self.prev_image_label.setSizePolicy(size_policy)
         prev_layout.addWidget(self.prev_image_label, stretch=1)
-        self.frames_splitter.addWidget(prev_panel)
+        self.frames_splitter.addWidget(self.prev_frame_panel)
 
         curr_panel = QWidget()
         curr_layout = QVBoxLayout(curr_panel)
@@ -552,8 +552,11 @@ class FrameByFrameWidget(QWidget):
         total = self.frames_splitter.width()
         if total <= 0:
             return
-        half = max(total // 2, 1)
-        self.frames_splitter.setSizes([half, half])
+        if not self.storage_service.has_previous_frame():
+            self.frames_splitter.setSizes([0, total])
+        else:
+            half = max(total // 2, 1)
+            self.frames_splitter.setSizes([half, half])
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -666,18 +669,16 @@ class FrameByFrameWidget(QWidget):
         current_masks = self.storage_service.get_current_frame_masks()
         self.curr_image_label.set_masks(current_masks)
 
-        # Update previous frame display (left side - shows cell IDs)
+        # Previous frame panel (hidden on frame 0)
         if self.storage_service.has_previous_frame():
+            self.prev_frame_panel.setVisible(True)
             prev_image = self.storage_service.get_frame(current_index - 1)
             self.prev_image_label.set_image(prev_image)
-
-            # Set previous frame masks if available
             prev_masks = self.storage_service.get_mask_for_frame(current_index - 1)
             self.prev_image_label.set_masks(prev_masks)
         else:
-            # First frame - no previous frame
-            self.prev_image_label.clear()
-            self.prev_image_label.setText("First Frame")
+            self.prev_frame_panel.setVisible(False)
+            self.prev_image_label.clear_all_state()
 
         self.refresh_cell_inspector()
         self._apply_cell_highlighting()

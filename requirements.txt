@@ -9,5 +9,5 @@ torch
 segment-anything
 natsort
 
-git+https://github.com/cellseek/cellsam
+cellpose>=4.0,<5
 trackastra
