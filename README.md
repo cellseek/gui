@@ -1,223 +1,140 @@
-# CellSeek GUI - Frame-by-Frame Cell Tracking
+# CellSeek
 
-A modern PyQt6 interface for frame-by-frame cell segmentation and tracking using [Cellpose-SAM](https://github.com/MouseLand/cellpose) and SAM.
-
-## Overview
-
-This GUI implements a frame-by-frame workflow where users are involved in every step of the cell tracking process. It's designed for scenarios where manual correction and supervision are needed at each frame.
-
-## Quick Start
-
-### Prerequisites
-
-```bash
-pip install -r requirements.txt
-```
-
-### Running the Application
-
-```bash
-cd gui
-python main.py
-```
+Desktop GUI for **frame-by-frame cell segmentation and tracking** on microscopy image sequences and videos. Built with **PyQt6**, it combines automatic models (Cellpose-SAM, Trackastra) with interactive refinement (Segment Anything).
 
 ## Features
 
-- **Modern Dark Theme**: Professional, eye-friendly interface optimized for long work sessions
-- **Drag & Drop Import**: Support for video files and image sequences
-- **Frame-by-Frame Workflow**: Manual supervision at every step
-- **Cellpose-SAM**: Automatic segmentation for the first frame and each tracked frame
-- **Trackastra linking**: ML-based cell identity assignment between frames
-- **SAM Manual Annotation**: Point/box-based editing and mask removal
-- **Real-time Feedback**: Immediate visual updates for all operations
-- **Keyboard Shortcuts**: Efficient navigation and tool switching
-- **Memory Monitoring**: Display of current memory usage
-- **Progress Tracking**: Visual progress indicators for long operations
+- **Import** image sequences or a single video (drag-and-drop or file picker)
+- **Preprocess** before tracking: crop, brightness/contrast/gamma, trim frame range; preview and scrub on video
+- **Segment & track** one frame at a time:
+  - First frame: automatic segmentation with **Cellpose-SAM** (cpsam)
+  - Later frames: press **Next** to auto-segment and link identities from the previous frame (**CellSAM + Trackastra**)
+  - Manual correction with **SAM** (click, box, or paint prompts) and brush tools; undo/redo mask history
+- **Relink** cell IDs on the current frame after edits (keeps mask shapes, reassigns labels via Trackastra)
+- **Export** per-frame tracking CSV, cell summary CSV, annotated video, and labeled frame images with morphological metrics
 
-## Installation
+## Workflow
 
-### Prerequisites
-
-- Python 3.8 or higher
-- Windows/Linux/macOS support
-
-### Quick Setup
-
-1. Navigate to the GUI directory:
-
-```bash
-cd gui
+```
+Import → Preprocess → Track (frame-by-frame) → Export
 ```
 
-2. Run the setup script:
+1. **Import** — Drop images or one video. Videos are decoded lazily (no full export to disk). Only one video per import.
+2. **Preprocess** — Adjust tone, crop ROI, and trim the frame range; confirm to start tracking.
+3. **Track** — Review/edit masks on each frame; use **Next (D)** to advance. Empty next frames are segmented and linked automatically when the current frame has a mask.
+4. **Export** — Open export from the tracking screen when ready.
 
-```bash
-python setup.py
+Use **Restart** to return to preprocess (e.g. change crop or trim) without re-importing.
+
+## Supported formats
+
+| Type   | Extensions                          |
+| ------ | ----------------------------------- |
+| Images | PNG, JPG, JPEG, TIFF, TIF, BMP, GIF |
+| Video  | MP4, AVI, MOV, MKV, WMV, FLV, WEBM  |
+
+Videos are subsampled by default (one logical frame every **30** source frames, ~1 Hz at 30 fps). Image sequences use natural sort order (`natsort`).
+
+## Requirements
+
+- **Python 3** (version compatible with PyTorch and dependencies below)
+- **GPU recommended** — SAM uses CUDA when available; Trackastra uses `device="automatic"`. CPU fallback is possible but slower.
+- Disk space for model weights (see [Model weights](#model-weights))
+
+### Python dependencies
+
+Install from `requirements.txt`:
+
+```
+PyQt6
+cellpose
+natsort
+numpy
+opencv-python
+psutil
+segment-anything
+torch
+trackastra
 ```
 
-3. Start the application:
+```bash
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS/Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+## Running the app
+
+From the project root (`gui/`):
 
 ```bash
 python main.py
 ```
 
-### Manual Installation
+On startup the app:
 
-If the setup script fails, install dependencies manually:
+1. Ensures `weights/sam_vit_b_01ec64.pth` exists (downloads from Meta if missing)
+2. Launches the dark-themed main window
 
-```bash
-pip install PyQt6 numpy opencv-python matplotlib pandas Pillow torch torchvision
-```
+**Cellpose-SAM (cpsam)** weights download on first segmentation if not present under `weights/cpsam` (see `utils/cellsam_segment.py`).
 
-## Usage
+Optional: place `resources/icon.png` for the window icon.
 
-### 1. Project Setup
+## Model weights
 
-- Start the application
-- Create a new project or open an existing one
-- Choose your working directory
+| Model                   | Purpose                                | Location / source                                             |
+| ----------------------- | -------------------------------------- | ------------------------------------------------------------- |
+| SAM ViT-B               | Interactive click/box/paint refinement | `weights/sam_vit_b_01ec64.pth` — auto-downloaded by `main.py` |
+| Cellpose-SAM (cpsam)    | Initial frame + advance segmentation   | `weights/cpsam` or Cellpose download on first use             |
+| Trackastra `general_2d` | Identity linking between frames        | Downloaded by Trackastra on first use                         |
 
-### 2. Frame Loading
+`weights/` is gitignored; weights are fetched at runtime.
 
-- Use the Frame Manager tab
-- Drag and drop image files or video frames
-- Frames will be automatically sorted and displayed as thumbnails
-- Supported formats: PNG, JPEG, TIFF, BMP, GIF; video: MP4, AVI, MOV, MKV, WMV, WEBM
+## Keyboard shortcuts (tracking screen)
 
-### 3. Cell Segmentation
+| Key                     | Action                                                   |
+| ----------------------- | -------------------------------------------------------- |
+| **A**                   | Previous frame                                           |
+| **D**                   | Next frame (auto-segment/link if next frame has no mask) |
+| **Tab**                 | Cycle annotation tool mode                               |
+| **Ctrl+Z** / **Ctrl+Y** | Undo / redo mask edits                                   |
 
-- Switch to the Segmentation tab
-- Select the first frame for analysis
-- First frame is segmented automatically with Cellpose-SAM when tracking starts
-- Masks will be overlaid on the image
+Tool modes: View, Click Add, Box Add, Paint Add (SAM), Mask Remove, Edit Cell ID (also selectable via radio buttons).
 
-### 4. Manual Annotation (Optional)
-
-- Use SAM tools to refine segmentation
-- Add or remove cell masks as needed
-- Point-based and box-based annotation support
-
-### 5. Cell Tracking
-
-- Press **Next** (or **D**) to advance; each new frame is segmented with Cellpose-SAM and linked to the previous frame with [Trackastra](https://github.com/weigertlab/trackastra)
-- Correct masks manually when needed; undo/redo (**Ctrl+Z** / **Ctrl+Y**) is available
-
-### 6. Analysis
-
-- Access the Analysis tab to view results
-- Automatic calculation of cell parameters:
-  - Area, perimeter, circularity
-  - Mean intensity, standard deviation
-  - Centroid coordinates
-- Interactive plots and data tables
-- Statistical summaries
-
-### 7. Export Results
-
-- Use the Export tab for comprehensive data export
-- Multiple format options:
-  - **Data**: CSV, Excel, JSON
-  - **Images**: PNG, JPEG, TIFF
-  - **Videos**: MP4, AVI, MOV
-- Batch export capabilities
-- File preview and organization
-
-## Project Structure
+## Project structure
 
 ```
 gui/
-├── __init__.py              # Main application entry
-├── main.py                  # Application launcher
-├── setup.py                 # Dependency installer
-├── requirements.txt         # Package requirements
-├── README.md               # This file
-├── main_window.py          # Main GUI window
-├── core/
-│   └── project_manager.py  # Project file management
-└── widgets/
-    ├── __init__.py
-    ├── frame_manager.py     # Frame loading and display
-    ├── cellsam_service.py      # Cellpose-SAM first-frame segmentation
-    ├── frame_by_frame_widget.py  # Tracking workflow
-    ├── analysis_panel.py    # Data analysis and plots
-    └── export_panel.py      # Result export
+├── main.py                 # Entry point, theme, SAM weight check
+├── main_window.py          # Stacked workflow: import → preprocess → track → export
+├── requirements.txt
+├── weights/                # Runtime model files (not in git)
+├── services/               # CellSAM, SAM, tracking, storage, export, annotations
+├── widgets/                # UI screens and interactive canvas
+├── workers/                # Background threads for models and video import
+└── utils/                  # Segmentation, tracking, preprocess, media helpers
 ```
 
-## Configuration
+## Export outputs
 
-### Cellpose-SAM
+The export screen can generate:
 
-The `cpsam` model is loaded via the official [cellpose](https://github.com/MouseLand/cellpose) package. On first use it downloads to `~/.cellpose/models/` unless you place weights at `gui/weights/cpsam`.
+- **Per-frame CSV** — tracking data with morphological and movement metrics
+- **Cell summary CSV** — aggregated statistics per cell ID
+- **Annotated video** — masks overlaid on source frames
+- **Individual frames** — labeled images per time point
 
-### Export Settings
+Configure time-per-frame (minutes) for movement calculations in the export UI (`ExportService` defaults to 3 minutes per frame until changed).
 
-- **Output Directory**: Where to save results
-- **File Naming**: Automatic or custom naming schemes
-- **Format Options**: Quality and compression settings
+## Notes
 
-## Troubleshooting
-
-### Common Issues
-
-1. **Import Errors**: Ensure all dependencies are installed
-
-   ```bash
-   python setup.py
-   ```
-
-2. **PyQt6 Installation**: On some systems, use:
-
-   ```bash
-   pip install PyQt6 --force-reinstall
-   ```
-
-3. **CUDA/GPU Issues**: Ensure PyTorch CUDA compatibility:
-
-   ```bash
-   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-   ```
-
-4. **Memory Issues**: Reduce batch size or image resolution
-
-### Performance Tips
-
-- Use smaller images for faster processing
-- Close unused applications to free memory
-- Use GPU acceleration when available
-- Save projects regularly to prevent data loss
-
-## Development
-
-### Adding New Features
-
-1. Create new widget in `widgets/` directory
-2. Import in `widgets/__init__.py`
-3. Add to main window in `main_window.py`
-4. Update project manager if persistence needed
-
-### Custom Themes
-
-Modify the stylesheet in `__init__.py` to customize appearance.
-
-## License
-
-This project is part of the CellSeek framework for cell analysis and tracking.
-
-## Support
-
-For issues and questions:
-
-1. Check this README
-2. Review error messages in the application
-3. Ensure all dependencies are properly installed
-4. Check system compatibility
-
-## Changelog
-
-### v1.0.0 (Initial Release)
-
-- Complete GUI framework
-- Cellpose-SAM segment-and-link tracking
-- Modern dark theme
-- Comprehensive export system
-- Real-time analysis and visualization
+- Processing resizes frames for inference (max dimension **512** for segmentation paths) while preserving workflow masks as label images (`uint16`).
+- Status bar shows process **memory usage** (updated every 2 s).
+- If CellSAM fails on the first frame, you can still annotate manually with SAM or paint tools.
+- Editing a frame and advancing may clear masks on **later** frames after relink/advance operations that change identities downstream.

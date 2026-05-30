@@ -1,13 +1,9 @@
-# Core GUI and Application Dependencies
 PyQt6
+cellpose
+natsort
 numpy
 opencv-python
 psutil
-
-# Machine Learning and Computer Vision
-torch
 segment-anything
-natsort
-
-cellpose>=4.0,<5
+torch
 trackastra
