@@ -10,10 +10,13 @@ VIDEO_EXTENSIONS: FrozenSet[str] = frozenset(
     {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm"}
 )
 
+CZI_EXTENSIONS: FrozenSet[str] = frozenset({".czi"})
+
 # Short list for UI copy (drop zone, README)
 SUPPORTED_FORMATS_LABEL = (
     "Images: PNG, JPG, TIFF, BMP, GIF — "
-    "Video: MP4, AVI, MOV, MKV, WMV, WEBM"
+    "Video: MP4, AVI, MOV, MKV, WMV, WEBM — "
+    "Microscopy: CZI"
 )
 
 
@@ -23,7 +26,11 @@ def _glob_list(extensions: FrozenSet[str]) -> str:
 
 def media_files_dialog_filter() -> str:
     """QFileDialog filter covering all supported image and video types."""
-    globs = f"{_glob_list(IMAGE_EXTENSIONS)} {_glob_list(VIDEO_EXTENSIONS)}"
+    globs = (
+        f"{_glob_list(IMAGE_EXTENSIONS)} "
+        f"{_glob_list(VIDEO_EXTENSIONS)} "
+        f"{_glob_list(CZI_EXTENSIONS)}"
+    )
     return f"Media Files ({globs});;All Files (*)"
 
 

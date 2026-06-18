@@ -9,6 +9,7 @@ import numpy as np
 
 from utils.frame_preprocess import PreprocessSettings
 from utils.image_preprocessor import ImagePreprocessor
+from utils.mask_postprocessor import MaskPostprocessor, MaskPostprocessorConfig
 from utils.video_frame_source import VideoFrameSource
 
 # Sample one frame every N video frames (~1 Hz at 30 fps).
@@ -22,6 +23,7 @@ class StorageService:
         self._frame_masks: List[Optional[np.ndarray]] = []
         self._current_frame_index: int = 0
         self._preprocessor = ImagePreprocessor(max_size=512)
+        self._mask_postprocessor = MaskPostprocessor()
         self._preprocess_settings = PreprocessSettings()
         self._frame_cache: Dict[int, np.ndarray] = {}
 
@@ -34,6 +36,19 @@ class StorageService:
         self._index_offset: int = 0
         self._original_size: Optional[Tuple[int, int]] = None  # (height, width)
         self._processed_size: Optional[Tuple[int, int]] = None
+
+    def set_brightfield_preprocessing_enabled(self, enabled: bool) -> None:
+        """Enable/disable brightfield preprocessing for all loaded frames."""
+        self._preprocessor.set_brightfield_enabled(enabled)
+        self.invalidate_frame_cache()
+
+    def set_mask_postprocessing_enabled(self, enabled: bool) -> None:
+        """Enable/disable morphological mask cleanup on stored masks."""
+        self._mask_postprocessor.enabled = enabled
+
+    @staticmethod
+    def default_mask_postprocessor_config() -> MaskPostprocessorConfig:
+        return MaskPostprocessorConfig()
 
     @property
     def is_video(self) -> bool:
@@ -70,8 +85,10 @@ class StorageService:
         self._frame_count = len(paths)
         self._frame_masks = [None] * self._frame_count
 
-        rgb = cv2.cvtColor(first, cv2.COLOR_BGR2RGB)
-        self._finalize_open_session(self._preprocess_settings.apply(rgb))
+        rgb = self._read_rgb_full(0)
+        if rgb is None:
+            raise ValueError(f"Failed to load image: {paths[0]}")
+        self._finalize_open_session(rgb)
 
     def open_video(
         self, video_path: str, frame_interval: int = DEFAULT_VIDEO_FRAME_INTERVAL
@@ -86,10 +103,10 @@ class StorageService:
         self._index_offset = 0
         self._frame_count = self._source_frame_count
         self._frame_masks = [None] * self._frame_count
-        frame0 = self._video_source.read_rgb(0)
+        frame0 = self._read_rgb_full(0)
         if frame0 is None:
             raise RuntimeError("Failed to read first video frame")
-        self._finalize_open_session(self._preprocess_settings.apply(frame0))
+        self._finalize_open_session(frame0)
 
     def set_image_paths(self, paths: List[str]) -> None:
         """Backward-compatible entry point for image sequences."""
@@ -112,9 +129,9 @@ class StorageService:
         self._preprocess_settings = settings.copy()
         self._apply_clip_from_settings()
         self.invalidate_frame_cache()
-        raw0 = self._read_rgb_raw(0)
-        if raw0 is not None:
-            self._finalize_open_session(self._preprocess_settings.apply(raw0))
+        rgb0 = self._read_rgb_full(0)
+        if rgb0 is not None:
+            self._finalize_open_session(rgb0)
 
     def _apply_clip_from_settings(self) -> None:
         """Trim exposed frame range to clip_start … clip_end."""
@@ -193,7 +210,8 @@ class StorageService:
         rgb = self._read_rgb_raw(index)
         if rgb is None:
             return None
-        return self._preprocess_settings.apply(rgb)
+        rgb = self._preprocess_settings.apply(rgb)
+        return self._preprocessor.apply_brightfield(rgb)
 
     def load_original_frame(self, index: int) -> Optional[np.ndarray]:
         """Load full-resolution RGB frame with preprocessing applied."""
@@ -304,7 +322,8 @@ class StorageService:
 
     def set_mask_for_frame(self, frame_index: int, masks: np.ndarray) -> None:
         if 0 <= frame_index < len(self._frame_masks):
-            self._frame_masks[frame_index] = masks
+            cleaned = self._mask_postprocessor.process_label_mask(masks)
+            self._frame_masks[frame_index] = cleaned
 
     def invalidate_frame_cache(self, frame_index: Optional[int] = None) -> None:
         if frame_index is None:

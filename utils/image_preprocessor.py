@@ -11,24 +11,50 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
+from utils.brightfield_preprocessor import (
+    BrightfieldPreprocessor,
+    BrightfieldPreprocessorConfig,
+)
+
 
 class ImagePreprocessor:
     """
     Handles image preprocessing including resizing and temporary file management
     """
 
-    def __init__(self, max_size: int = 512):
+    def __init__(
+        self,
+        max_size: int = 512,
+        brightfield_preprocessor: BrightfieldPreprocessor | None = None,
+    ):
         """
         Initialize image preprocessor
 
         Args:
             max_size: Maximum dimension (width or height) for processed images
+            brightfield_preprocessor: Optional brightfield pipeline applied
+                after load and before resize (denoise, flat-field, CLAHE).
         """
         self.max_size = max_size
+        self.brightfield_preprocessor = (
+            brightfield_preprocessor
+            if brightfield_preprocessor is not None
+            else BrightfieldPreprocessor()
+        )
         self.temp_dir: Optional[Path] = None
         self.original_to_processed_paths = {}
         self.scale_factors = {}
         self._common_scale_factor: Optional[float] = None
+
+    def set_brightfield_enabled(self, enabled: bool) -> None:
+        self.brightfield_preprocessor.enabled = enabled
+
+    @staticmethod
+    def default_brightfield_config() -> BrightfieldPreprocessorConfig:
+        return BrightfieldPreprocessorConfig()
+
+    def apply_brightfield(self, image_rgb: np.ndarray) -> np.ndarray:
+        return self.brightfield_preprocessor.transform(image_rgb)
 
     def create_temp_directory(self) -> Path:
         """Create temporary directory for processed images"""
@@ -120,8 +146,9 @@ class ImagePreprocessor:
         if image is None:
             raise ValueError(f"Failed to load image: {image_path}")
 
-        # Convert BGR to RGB
+        # Convert BGR to RGB, then brightfield preprocessing before resize.
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_rgb = self.brightfield_preprocessor.transform(image_rgb)
 
         # Resize if needed
         resized_image, scale_factor = self.resize_image(image_rgb)

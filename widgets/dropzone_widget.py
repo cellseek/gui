@@ -5,6 +5,7 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QFont
 from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from utils.media_formats import (
+    CZI_EXTENSIONS,
     IMAGE_EXTENSIONS,
     SUPPORTED_FORMATS_LABEL,
     VIDEO_EXTENSIONS,
@@ -171,7 +172,11 @@ class DropZoneWidget(QWidget):
         """Check if file is valid image or video"""
         ext = Path(file_path).suffix.lower()
 
-        return ext in IMAGE_EXTENSIONS or ext in VIDEO_EXTENSIONS
+        return (
+            ext in IMAGE_EXTENSIONS
+            or ext in VIDEO_EXTENSIONS
+            or ext in CZI_EXTENSIONS
+        )
 
     def reset_state(self):
         """Reset widget state"""

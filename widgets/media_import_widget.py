@@ -11,6 +11,7 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QVBoxLayout, QWidget
 
 from services.storage_service import DEFAULT_VIDEO_FRAME_INTERVAL
+from utils.czi_reader import extract_czi_frames, is_czi_file
 from utils.media_formats import VIDEO_EXTENSIONS, media_files_dialog_filter
 from widgets.dropzone_widget import DropZoneWidget
 from workers.video_import_worker import VideoImportWorker
@@ -55,11 +56,14 @@ class MediaImportWidget(QWidget):
     def process_files(self, file_paths: List[str]):
         videos = []
         image_paths = []
+        czi_paths = []
 
         for file_path in file_paths:
             ext = Path(file_path).suffix.lower()
             if ext in VIDEO_EXTENSIONS:
                 videos.append(file_path)
+            elif is_czi_file(file_path):
+                czi_paths.append(file_path)
             else:
                 image_paths.append(file_path)
 
@@ -74,13 +78,40 @@ class MediaImportWidget(QWidget):
         if videos:
             self._start_video_import(videos[0])
 
+        if czi_paths:
+            image_paths.extend(self._extract_czi_frames(czi_paths))
+
         if image_paths:
             self._finish_image_import(image_paths)
 
         if not videos and not image_paths:
             QMessageBox.warning(
-                self, "No Valid Media", "No valid image or video files found"
+                self, "No Valid Media", "No valid image, video, or CZI files found"
             )
+
+    def _extract_czi_frames(self, czi_paths: List[str]) -> List[str]:
+        """Export CZI timepoints as PNG frames for the image import path."""
+        frame_paths: List[str] = []
+
+        for czi_path in czi_paths:
+            try:
+                czi_frames = extract_czi_frames(czi_path, frame_interval=1)
+                if czi_frames:
+                    frame_paths.extend(czi_frames)
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "CZI Error",
+                        f"No frames found in: {Path(czi_path).name}",
+                    )
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "CZI Error",
+                    f"Error reading {Path(czi_path).name}: {str(e)}",
+                )
+
+        return frame_paths
 
     def _start_video_import(self, video_path: str):
         if self._video_import_worker is not None and self._video_import_worker.isRunning():
@@ -142,3 +173,11 @@ class MediaImportWidget(QWidget):
     def reset_state(self):
         self.status_update.emit("Ready - Import video or images to begin")
         self.drop_zone.setEnabled(True)
+
+        temp_dir = Path("temp_frames")
+        if temp_dir.exists():
+            for file in temp_dir.rglob("*.png"):
+                file.unlink()
+            for subdir in temp_dir.iterdir():
+                if subdir.is_dir() and subdir.name.startswith("czi_"):
+                    subdir.rmdir()
