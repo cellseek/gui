@@ -54,6 +54,8 @@ class ExportWorker(QThread):
             self.export_service.export_to_csv(**self.kwargs)
         elif self.operation == "summary":
             self.export_service.export_cell_summary_to_csv(**self.kwargs)
+        elif self.operation == "coco":
+            self.export_service.export_coco_json(**self.kwargs)
         elif self.operation == "video":
             self.export_service.export_annotated_video(**self.kwargs)
         elif self.operation == "frames":
@@ -252,6 +254,14 @@ class ExportWidget(QWidget):
         self.export_summary_check = QCheckBox("Summary Statistics CSV")
         self.export_summary_check.setChecked(True)
         format_layout.addWidget(self.export_summary_check)
+
+        self.export_coco_check = QCheckBox("COCO Mask JSON (RLE)")
+        self.export_coco_check.setChecked(True)
+        self.export_coco_check.setToolTip(
+            "Export instance masks as benchmark-compatible COCO RLE JSON "
+            "(instances_coco.json)"
+        )
+        format_layout.addWidget(self.export_coco_check)
 
         self.export_video_check = QCheckBox("Annotated Video")
         format_layout.addWidget(self.export_video_check)
@@ -552,6 +562,7 @@ class ExportWidget(QWidget):
             [
                 self.export_csv_check.isChecked(),
                 self.export_summary_check.isChecked(),
+                self.export_coco_check.isChecked(),
                 self.export_video_check.isChecked(),
                 self.export_frames_check.isChecked(),
             ]
@@ -560,6 +571,20 @@ class ExportWidget(QWidget):
                 self, "Export Error", "Please select at least one export format."
             )
             return False
+
+        # Fail early for COCO-only dependency so other formats are not interrupted mid-run.
+        if self.export_coco_check.isChecked():
+            try:
+                import pycocotools.mask  # noqa: F401
+            except ImportError:
+                QMessageBox.warning(
+                    self,
+                    "Export Error",
+                    "COCO Mask JSON requires pycocotools.\n"
+                    "Install it with: pip install pycocotools\n"
+                    "Or uncheck COCO Mask JSON to export the other formats.",
+                )
+                return False
 
         # Check output directory
         output_dir = self.output_dir_edit.text().strip()
@@ -603,59 +628,78 @@ class ExportWidget(QWidget):
         export_dir = os.path.join(output_dir, f"{filename_prefix}_{timestamp}")
         os.makedirs(export_dir, exist_ok=True)
 
-        # Export CSV
-        if self.export_csv_check.isChecked():
-            csv_path = os.path.join(export_dir, f"{filename_prefix}.csv")
-            self.export_worker = ExportWorker(
-                self.export_service,
-                "csv",
-                output_path=csv_path,
-                frame_range=frame_range,
-            )
-            self.export_worker.start()
-            self.export_worker.wait()
+        # Freeze one mask snapshot so CSV / COCO / annotated images stay aligned.
+        self.export_service.begin_aligned_export()
+        try:
+            # Export CSV
+            if self.export_csv_check.isChecked():
+                csv_path = os.path.join(export_dir, f"{filename_prefix}.csv")
+                self.export_worker = ExportWorker(
+                    self.export_service,
+                    "csv",
+                    output_path=csv_path,
+                    frame_range=frame_range,
+                )
+                self.export_worker.start()
+                self.export_worker.wait()
 
-        # Export Summary CSV
-        if self.export_summary_check.isChecked():
-            summary_path = os.path.join(export_dir, f"{filename_prefix}_summary.csv")
-            self.export_worker = ExportWorker(
-                self.export_service,
-                "summary",
-                output_path=summary_path,
-                frame_range=frame_range,
-            )
-            self.export_worker.start()
-            self.export_worker.wait()
+            # Export Summary CSV
+            if self.export_summary_check.isChecked():
+                summary_path = os.path.join(export_dir, f"{filename_prefix}_summary.csv")
+                self.export_worker = ExportWorker(
+                    self.export_service,
+                    "summary",
+                    output_path=summary_path,
+                    frame_range=frame_range,
+                )
+                self.export_worker.start()
+                self.export_worker.wait()
 
-        # Export Video
-        if self.export_video_check.isChecked():
-            video_ext = (
-                ".mp4" if self.video_format_combo.currentText() == "MP4" else ".avi"
-            )
-            video_path = os.path.join(export_dir, f"{filename_prefix}_video{video_ext}")
-            fps = self.video_fps_spin.value()
+            # Export COCO RLE JSON (benchmark-compatible)
+            if self.export_coco_check.isChecked():
+                coco_path = os.path.join(export_dir, "instances_coco.json")
+                self.export_worker = ExportWorker(
+                    self.export_service,
+                    "coco",
+                    output_path=coco_path,
+                    frame_range=frame_range,
+                )
+                self.export_worker.start()
+                self.export_worker.wait()
 
-            self.export_worker = ExportWorker(
-                self.export_service,
-                "video",
-                output_path=video_path,
-                fps=fps,
-                frame_range=frame_range,
-            )
-            self.export_worker.start()
-            self.export_worker.wait()
+            # Export Video
+            if self.export_video_check.isChecked():
+                video_ext = (
+                    ".mp4" if self.video_format_combo.currentText() == "MP4" else ".avi"
+                )
+                video_path = os.path.join(
+                    export_dir, f"{filename_prefix}_video{video_ext}"
+                )
+                fps = self.video_fps_spin.value()
 
-        # Export Individual Frames
-        if self.export_frames_check.isChecked():
-            frames_dir = os.path.join(export_dir, "frames")
-            self.export_worker = ExportWorker(
-                self.export_service,
-                "frames",
-                output_dir=frames_dir,
-                frame_range=frame_range,
-            )
-            self.export_worker.start()
-            self.export_worker.wait()
+                self.export_worker = ExportWorker(
+                    self.export_service,
+                    "video",
+                    output_path=video_path,
+                    fps=fps,
+                    frame_range=frame_range,
+                )
+                self.export_worker.start()
+                self.export_worker.wait()
+
+            # Export Individual Frames
+            if self.export_frames_check.isChecked():
+                frames_dir = os.path.join(export_dir, "frames")
+                self.export_worker = ExportWorker(
+                    self.export_service,
+                    "frames",
+                    output_dir=frames_dir,
+                    frame_range=frame_range,
+                )
+                self.export_worker.start()
+                self.export_worker.wait()
+        finally:
+            self.export_service.end_aligned_export()
 
     def on_export_completed(self, success: bool, message: str):
         """Handle export completion"""

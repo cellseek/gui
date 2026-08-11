@@ -37,10 +37,36 @@ class ExportService(QObject):
         # Constants
         self.TIME_PER_FRAME = 3  # minutes per frame (configurable)
         self.MIN_CONTOUR_POINTS = 5
+        # Frozen original-size masks shared by CSV / COCO / annotated image exports.
+        self._export_mask_snapshot: Optional[Dict[int, Optional[np.ndarray]]] = None
 
     def set_time_per_frame(self, minutes: float):
         """Set time interval between frames"""
         self.TIME_PER_FRAME = minutes
+
+    def begin_aligned_export(self) -> None:
+        """Freeze current masks once so CSV, COCO, and images export the same version."""
+        self.status_updated.emit("Freezing current masks for aligned export...")
+        snapshot: Dict[int, Optional[np.ndarray]] = {}
+        frame_count = self.storage_service.get_frame_count()
+        for frame_index in range(frame_count):
+            masks = self.storage_service.get_mask_for_frame_original_size(frame_index)
+            snapshot[frame_index] = None if masks is None else np.array(masks, copy=True)
+        self._export_mask_snapshot = snapshot
+
+    def end_aligned_export(self) -> None:
+        """Release the frozen export snapshot."""
+        self._export_mask_snapshot = None
+
+    def _get_export_mask(self, frame_index: int) -> Optional[np.ndarray]:
+        """Return the frozen export mask when available, else the live storage mask."""
+        if self._export_mask_snapshot is not None:
+            return self._export_mask_snapshot.get(frame_index)
+        return self.storage_service.get_mask_for_frame_original_size(frame_index)
+
+    def _has_export_mask(self, frame_index: int) -> bool:
+        masks = self._get_export_mask(frame_index)
+        return masks is not None and np.any(masks > 0)
 
     # ========================================
     # MORPHOLOGICAL ANALYSIS FUNCTIONS
@@ -301,44 +327,56 @@ class ExportService(QObject):
     # ========================================
 
     def extract_frame_data(self, frame_index: int) -> List[Dict[str, Any]]:
-        """Extract all cell data for a single frame."""
-        masks = self.storage_service.get_mask_for_frame_original_size(frame_index)
+        """Extract all cell data for a single frame.
+
+        Cell IDs are taken from the same label mask used by COCO/image export,
+        so CSV rows stay aligned with annotated pixels and COCO annotations.
+        """
+        masks = self._get_export_mask(frame_index)
         if masks is None:
             return []
 
-        # Extract contours for each cell
         cell_contours = self.extract_cell_contours(masks)
-
         frame_data = []
-        for cell_id, contour in cell_contours.items():
+        # Iterate positive labels from the mask itself (same source as COCO/images).
+        for cell_id in sorted(int(v) for v in np.unique(masks) if int(v) > 0):
             try:
-                # Calculate morphological metrics
-                area, perimeter, circularity, aspect_ratio, ellipse_angle, solidity = (
-                    self.calculate_contour_metrics(contour)
+                instance_mask = masks == cell_id
+                if not np.any(instance_mask):
+                    continue
+                ys, xs = np.nonzero(instance_mask)
+                cx = float(xs.mean())
+                cy = float(ys.mean())
+                contour = cell_contours.get(cell_id)
+                if contour is not None:
+                    area, perimeter, circularity, aspect_ratio, ellipse_angle, solidity = (
+                        self.calculate_contour_metrics(contour)
+                    )
+                    cx, cy = self.calculate_mask_centroid(contour)
+                else:
+                    # Fallback keeps the cell present in CSV if contour extraction fails.
+                    area = float(instance_mask.sum())
+                    perimeter = 0.0
+                    circularity = 0.0
+                    aspect_ratio = 1.0
+                    ellipse_angle = 0.0
+                    solidity = 0.0
+
+                frame_data.append(
+                    {
+                        "frame_id": frame_index,
+                        "cell_id": cell_id,
+                        "time_minutes": frame_index * self.TIME_PER_FRAME,
+                        "x_px": cx,
+                        "y_px": cy,
+                        "area_px2": area,
+                        "perimeter_px": perimeter,
+                        "circularity": circularity,
+                        "ellipse_aspect_ratio": aspect_ratio,
+                        "ellipse_angle": ellipse_angle,
+                        "solidity": solidity,
+                    }
                 )
-
-                # Calculate centroid
-                cx, cy = self.calculate_mask_centroid(contour)
-
-                # Time stamp (frame index * time per frame)
-                time_minutes = frame_index * self.TIME_PER_FRAME
-
-                cell_data = {
-                    "frame_id": frame_index,
-                    "cell_id": cell_id,
-                    "time_minutes": time_minutes,
-                    "x_px": cx,
-                    "y_px": cy,
-                    "area_px2": area,
-                    "perimeter_px": perimeter,
-                    "circularity": circularity,
-                    "ellipse_aspect_ratio": aspect_ratio,
-                    "ellipse_angle": ellipse_angle,
-                    "solidity": solidity,
-                }
-
-                frame_data.append(cell_data)
-
             except Exception as e:
                 print(
                     f"Warning: Failed to process cell {cell_id} in frame {frame_index}: {e}"
@@ -353,7 +391,7 @@ class ExportService(QObject):
         frame_count = self.storage_service.get_frame_count()
 
         for frame_index in range(frame_count):
-            if self.storage_service.has_mask_for_frame(frame_index):
+            if self._has_export_mask(frame_index):
                 frame_data = self.extract_frame_data(frame_index)
                 all_data.extend(frame_data)
 
@@ -598,7 +636,7 @@ class ExportService(QObject):
             # Check if we have frames to export
             frames_to_export = []
             for i in range(start_frame, end_frame + 1):
-                if self.storage_service.has_mask_for_frame(i):
+                if self._has_export_mask(i):
                     frames_to_export.append(i)
 
             if not frames_to_export:
@@ -631,10 +669,8 @@ class ExportService(QObject):
                 # Convert RGB to BGR for OpenCV
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-                # Get masks and draw annotations
-                masks = self.storage_service.get_mask_for_frame_original_size(
-                    frame_index
-                )
+                # Get frozen export masks and draw annotations
+                masks = self._get_export_mask(frame_index)
                 if masks is not None:
                     annotated_frame = self.draw_cell_annotations(frame_bgr, masks)
                 else:
@@ -663,9 +699,8 @@ class ExportService(QObject):
         """Draw cell annotations on frame using the same style as interactive frame widget."""
         annotated_frame = frame.copy()
 
-        # Get unique cell IDs
-        unique_ids = np.unique(masks)
-        cell_ids = [id_val for id_val in unique_ids if id_val > 0]
+        # Same positive labels as CSV/COCO (sorted for stable drawing order).
+        cell_ids = sorted(int(v) for v in np.unique(masks) if int(v) > 0)
 
         if not cell_ids:
             return annotated_frame
@@ -761,6 +796,136 @@ class ExportService(QObject):
 
         return overlay
 
+    def export_coco_json(
+        self, output_path: str, frame_range: Optional[Tuple[int, int]] = None
+    ) -> bool:
+        """Export tracking masks as COCO RLE JSON (benchmark-compatible)."""
+        try:
+            from pycocotools import mask as coco_mask
+        except ImportError:
+            self.export_completed.emit(
+                False,
+                "Failed to export COCO JSON: pycocotools is not installed. "
+                "Install it with: pip install pycocotools",
+            )
+            return False
+
+        try:
+            frame_count = self.storage_service.get_frame_count()
+            if frame_count == 0:
+                self.export_completed.emit(False, "No frames loaded to export")
+                return False
+
+            if frame_range:
+                start_frame, end_frame = frame_range
+            else:
+                start_frame, end_frame = 0, frame_count - 1
+            start_frame = max(0, int(start_frame))
+            end_frame = min(frame_count - 1, int(end_frame))
+            if start_frame > end_frame:
+                self.export_completed.emit(False, "Invalid frame range for COCO export")
+                return False
+
+            frames_to_export = list(range(start_frame, end_frame + 1))
+            coco_doc: Dict[str, Any] = {
+                "info": {"description": "CellSeek GUI tracking masks"},
+                "licenses": [],
+                "categories": [{"id": 1, "name": "cell"}],
+                "images": [],
+                "annotations": [],
+            }
+            annotation_id = 1
+            self.status_updated.emit("Writing COCO JSON masks...")
+
+            for i, frame_index in enumerate(frames_to_export):
+                masks = self._get_export_mask(frame_index)
+                if masks is None:
+                    original = self.storage_service.load_original_frame(frame_index)
+                    if original is None:
+                        continue
+                    height, width = original.shape[:2]
+                    coco_doc["images"].append(
+                        {
+                            "id": frame_index,
+                            "file_name": f"frame_{frame_index:04d}",
+                            "height": int(height),
+                            "width": int(width),
+                        }
+                    )
+                else:
+                    if masks.ndim != 2:
+                        raise ValueError(
+                            f"Expected 2D labels, got {masks.shape} for frame {frame_index}."
+                        )
+                    height, width = masks.shape
+                    coco_doc["images"].append(
+                        {
+                            "id": frame_index,
+                            "file_name": f"frame_{frame_index:04d}",
+                            "height": int(height),
+                            "width": int(width),
+                        }
+                    )
+                    for cell_id in sorted(
+                        int(v) for v in np.unique(masks) if int(v) > 0
+                    ):
+                        instance_mask = masks == cell_id
+                        if not np.any(instance_mask):
+                            continue
+                        ys, xs = np.nonzero(instance_mask)
+                        encoded = coco_mask.encode(
+                            np.asfortranarray(instance_mask.astype(np.uint8))
+                        )
+                        counts = encoded["counts"]
+                        if isinstance(counts, bytes):
+                            counts = counts.decode("ascii")
+                        coco_doc["annotations"].append(
+                            {
+                                "id": annotation_id,
+                                "image_id": frame_index,
+                                "category_id": 1,
+                                "segmentation": {
+                                    "size": [int(height), int(width)],
+                                    "counts": counts,
+                                },
+                                "area": int(instance_mask.sum()),
+                                "bbox": [
+                                    int(xs.min()),
+                                    int(ys.min()),
+                                    int(xs.max() - xs.min() + 1),
+                                    int(ys.max() - ys.min() + 1),
+                                ],
+                                "iscrowd": 0,
+                                "instance_label": cell_id,
+                                "track_id": cell_id,
+                            }
+                        )
+                        annotation_id += 1
+
+                progress = int((i + 1) / len(frames_to_export) * 100)
+                self.progress_updated.emit(progress)
+                self.status_updated.emit(
+                    f"Encoding COCO frame {frame_index + 1}/{end_frame + 1}"
+                )
+
+            if not coco_doc["images"]:
+                self.export_completed.emit(False, "No frames found to export as COCO JSON")
+                return False
+
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(coco_doc, f)
+            self.progress_updated.emit(100)
+            self.export_completed.emit(
+                True, f"COCO JSON exported successfully to {output_path}"
+            )
+            return True
+
+        except Exception as e:
+            error_msg = f"Failed to export COCO JSON: {str(e)}"
+            self.export_completed.emit(False, error_msg)
+            return False
+
     def export_individual_frames(
         self, output_dir: str, frame_range: Optional[Tuple[int, int]] = None
     ) -> bool:
@@ -779,7 +944,7 @@ class ExportService(QObject):
 
             exported_count = 0
             for frame_index in range(start_frame, end_frame + 1):
-                if not self.storage_service.has_mask_for_frame(frame_index):
+                if not self._has_export_mask(frame_index):
                     continue
 
                 # Load original frame
@@ -790,10 +955,8 @@ class ExportService(QObject):
                 # Convert RGB to BGR for OpenCV
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-                # Get masks and create annotated frame
-                masks = self.storage_service.get_mask_for_frame_original_size(
-                    frame_index
-                )
+                # Get frozen export masks and create annotated frame
+                masks = self._get_export_mask(frame_index)
                 if masks is not None:
                     annotated_frame = self.draw_cell_annotations(frame_bgr, masks)
                 else:
