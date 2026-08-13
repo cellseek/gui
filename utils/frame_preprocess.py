@@ -34,6 +34,7 @@ class PreprocessSettings:
     crop_rect: Optional[Tuple[int, int, int, int]] = None  # x, y, w, h
     clip_start: int = 0
     clip_end: int = -1  # inclusive; -1 = last frame
+    brightfield_enabled: bool = False
 
     def copy(self) -> "PreprocessSettings":
         return replace(self)
@@ -65,6 +66,7 @@ class PreprocessSettings:
             and self.crop_rect is None
             and self.clip_start == 0
             and self.clip_end < 0
+            and not self.brightfield_enabled
         )
 
     def apply(self, image: np.ndarray) -> np.ndarray:

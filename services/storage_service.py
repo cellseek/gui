@@ -12,8 +12,9 @@ from utils.image_preprocessor import ImagePreprocessor
 from utils.mask_postprocessor import MaskPostprocessor, MaskPostprocessorConfig
 from utils.video_frame_source import VideoFrameSource
 
-# Sample one frame every N video frames (~1 Hz at 30 fps).
-DEFAULT_VIDEO_FRAME_INTERVAL = 30
+# Microscopy time-lapse AVIs in this project are already sparse (e.g. 66 frames
+# at 5 fps). Keep every source frame. Use 30 only for real-time 30 fps movies.
+DEFAULT_VIDEO_FRAME_INTERVAL = 1
 
 
 class StorageService:
@@ -23,6 +24,7 @@ class StorageService:
         self._frame_masks: List[Optional[np.ndarray]] = []
         self._current_frame_index: int = 0
         self._preprocessor = ImagePreprocessor(max_size=512)
+        self._preprocessor.set_brightfield_enabled(False)
         self._mask_postprocessor = MaskPostprocessor()
         self._preprocess_settings = PreprocessSettings()
         self._frame_cache: Dict[int, np.ndarray] = {}
@@ -127,6 +129,9 @@ class StorageService:
     def set_preprocess_settings(self, settings: PreprocessSettings) -> None:
         """Apply preprocessing + clip; clears cache and refreshes geometry."""
         self._preprocess_settings = settings.copy()
+        self.set_brightfield_preprocessing_enabled(
+            bool(settings.brightfield_enabled)
+        )
         self._apply_clip_from_settings()
         self.invalidate_frame_cache()
         rgb0 = self._read_rgb_full(0)
@@ -211,7 +216,9 @@ class StorageService:
         if rgb is None:
             return None
         rgb = self._preprocess_settings.apply(rgb)
-        return self._preprocessor.apply_brightfield(rgb)
+        if self._preprocessor.brightfield_preprocessor.enabled:
+            return self._preprocessor.apply_brightfield(rgb)
+        return rgb
 
     def load_original_frame(self, index: int) -> Optional[np.ndarray]:
         """Load full-resolution RGB frame with preprocessing applied."""
@@ -256,6 +263,7 @@ class StorageService:
         self._processed_size = None
         self._current_frame_index = 0
         self._preprocess_settings = PreprocessSettings()
+        self._preprocessor.set_brightfield_enabled(False)
         self._preprocessor.cleanup_temp_directory()
 
     def get_image_paths(self) -> List[str]:

@@ -12,7 +12,8 @@ import numpy as np
 
 @dataclass
 class BrightfieldPreprocessorConfig:
-    enabled: bool = True
+    # Off by default: fluorescence / mCherry should not run CLAHE + flat-field.
+    enabled: bool = False
     bilateral_d: int = 9
     bilateral_sigma_color: float = 75.0
     bilateral_sigma_space: float = 75.0

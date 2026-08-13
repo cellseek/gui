@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from services.storage_service import StorageService
+from utils.brightfield_preprocessor import BrightfieldPreprocessor
 from utils.frame_preprocess import PreprocessSettings
 from widgets.preprocess_preview_widget import PreprocessPreviewWidget
 from widgets.trim_timeline_widget import TrimTimelineWidget
@@ -47,6 +49,8 @@ class PreprocessWidget(QWidget):
         self._crop_before_edit: Optional[Tuple[int, int, int, int]] = None
 
         self._raw_cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        self._brightfield_preview = BrightfieldPreprocessor()
+        self._brightfield_preview.enabled = True
 
         self._preview_timer = QTimer(self)
         self._preview_timer.timeout.connect(self._on_play_tick)
@@ -149,6 +153,25 @@ class PreprocessWidget(QWidget):
         self.gamma_slider = self._add_slider(tone_layout, "Gamma", 20, 300, 100, 100.0)
         panel_layout.addWidget(tone_group)
 
+        bf_group = QGroupBox("Brightfield pipeline")
+        bf_layout = QVBoxLayout(bf_group)
+        self.brightfield_check = QCheckBox("Apply brightfield preprocessing")
+        self.brightfield_check.setChecked(False)
+        self.brightfield_check.setToolTip(
+            "Denoise, flat-field, and CLAHE. Leave off for fluorescence "
+            "(mCherry, GFP, etc.)."
+        )
+        self.brightfield_check.toggled.connect(self._schedule_preview)
+        bf_layout.addWidget(self.brightfield_check)
+        bf_hint = QLabel(
+            "For fluorescence movies, leave this unchecked and skip "
+            "or continue without changes."
+        )
+        bf_hint.setWordWrap(True)
+        bf_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        bf_layout.addWidget(bf_hint)
+        panel_layout.addWidget(bf_group)
+
         crop_group = QGroupBox("Crop (optional)")
         crop_layout = QVBoxLayout(crop_group)
 
@@ -185,6 +208,12 @@ class PreprocessWidget(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch()
+        skip_btn = QPushButton("Skip preprocess")
+        skip_btn.setToolTip(
+            "Use original frames as-is (no tone, crop, trim, or brightfield)."
+        )
+        skip_btn.clicked.connect(self._on_skip)
+        footer.addWidget(skip_btn)
         continue_btn = QPushButton("Continue to tracking →")
         continue_btn.setStyleSheet(
             "QPushButton { background-color: #28a745; padding: 10px 20px; }"
@@ -286,6 +315,7 @@ class PreprocessWidget(QWidget):
         else:
             self._settings = PreprocessSettings()
             self.trim_timeline.reset_clip()
+            self.brightfield_check.setChecked(False)
             self._reset_adjustments()
             self.preview.set_crop_rect(None)
             self._refresh_preview(fast=False)
@@ -299,6 +329,7 @@ class PreprocessWidget(QWidget):
         self.brightness_slider.setValue(self._settings.brightness)
         self.contrast_slider.setValue(int(round(self._settings.contrast * 100)))
         self.gamma_slider.setValue(int(round(self._settings.gamma * 100)))
+        self.brightfield_check.setChecked(bool(self._settings.brightfield_enabled))
 
         end = self._settings.effective_clip_end(self._source_count)
         self.trim_timeline.set_clip_range(self._settings.clip_start, end)
@@ -323,6 +354,7 @@ class PreprocessWidget(QWidget):
             crop_rect=self.preview.get_crop_rect(),
             clip_start=start,
             clip_end=end,
+            brightfield_enabled=self.brightfield_check.isChecked(),
         )
 
     def _schedule_preview(self) -> None:
@@ -344,10 +376,12 @@ class PreprocessWidget(QWidget):
             cfg = self._settings.copy()
             cfg.crop_rect = None
             display = cfg.apply(raw)
+            display = self._maybe_brightfield(display)
             self.preview.set_image(display)
             self.preview.set_show_crop_overlay(True)
         else:
             display = self._settings.apply(raw)
+            display = self._maybe_brightfield(display)
             if fast:
                 display = self._downscale_for_preview(display)
             self.preview.set_image(display)
@@ -496,6 +530,16 @@ class PreprocessWidget(QWidget):
         self._preview_frame = next_f
         self.trim_timeline.set_current_frame(next_f)
         self._refresh_preview(fast=True)
+
+    def _maybe_brightfield(self, image: np.ndarray) -> np.ndarray:
+        if image is None or not self.brightfield_check.isChecked():
+            return image
+        return self._brightfield_preview.transform(image)
+
+    def _on_skip(self) -> None:
+        """Go to tracking with original frames (no tone, crop, trim, or brightfield)."""
+        self._stop_play()
+        self.preprocess_confirmed.emit(PreprocessSettings())
 
     def _on_continue(self) -> None:
         self._stop_play()
