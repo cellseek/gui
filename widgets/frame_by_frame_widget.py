@@ -704,7 +704,7 @@ class FrameByFrameWidget(QWidget):
             and np.any(curr_mask)
             and not self.is_tracking_running()
         )
-        self.relink_button.setEnabled(can_relink)
+        self.relink_button.setEnabled(bool(can_relink))
 
     def previous_frame(self):
         """Go to previous frame"""

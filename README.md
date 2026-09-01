@@ -52,6 +52,7 @@ natsort
 numpy
 opencv-python
 psutil
+pycocotools
 segment-anything
 torch
 trackastra
@@ -127,6 +128,7 @@ The export screen can generate:
 
 - **Per-frame CSV** — tracking data with morphological and movement metrics
 - **Cell summary CSV** — aggregated statistics per cell ID
+- **COCO Mask JSON (RLE)** — `instances_coco.json` with lossless instance masks and `track_id` (benchmark-compatible)
 - **Annotated video** — masks overlaid on source frames
 - **Individual frames** — labeled images per time point
 

@@ -4,6 +4,8 @@ natsort
 numpy
 opencv-python
 psutil
+pycocotools
 segment-anything
 torch
 trackastra
+aicspylibczi
